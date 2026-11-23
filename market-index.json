@@ -1,0 +1,88 @@
+{
+  "format": 1,
+  "title": {
+    "en": "DSH Host Plugin Index",
+    "zh": "DSH Host 插件源"
+  },
+  "description": {
+    "en": "Official plugin market index for dsh-host (Codex, Claude Code, and Antigravity inside DSH).",
+    "zh": "dsh-host 官方自定义插件源（在 DSH 中原生运行 Codex、Claude Code 与 Antigravity）。"
+  },
+  "metadata": {
+    "categories": {
+      "agents": {
+        "title": {
+          "en": "External Agents",
+          "zh": "外部执行引擎"
+        }
+      }
+    },
+    "labels": {
+      "windows": {
+        "title": {
+          "en": "Windows",
+          "zh": "Windows"
+        }
+      },
+      "multi-agent": {
+        "title": {
+          "en": "Multi-Agent",
+          "zh": "多引擎"
+        }
+      }
+    },
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-host",
+      "title": {
+        "en": "DSH Host",
+        "zh": "DSH Host"
+      },
+      "description": {
+        "en": "Run Codex, Claude Code, and Antigravity natively inside DSH with a plugin-owned local backend.",
+        "zh": "使用插件自带的本机轻量后端，在 DSH 中原生运行 Codex、Claude Code 与 Antigravity。"
+      },
+      "icon": "./icon.svg",
+      "author": "jayujie",
+      "homepage": "https://github.com/jayujie/dsh-host#readme",
+      "repository": {
+        "url": "https://github.com/jayujie/dsh-host"
+      },
+      "metadata": {
+        "category": "agents",
+        "keywords": [
+          "dsh",
+          "dsh-plugin",
+          "deepseek-harness",
+          "dsh-host",
+          "codex",
+          "claude-code",
+          "antigravity",
+          "codexhost",
+          "multi-agent"
+        ],
+        "labels": [
+          "windows",
+          "multi-agent"
+        ],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.6.0",
+          "publishTimestamp": 1795451135,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/jayujie/dsh-host",
+            "commit": "8a6186ed43dc35deb436ecc14c2d65492ae08003"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.5 <0.3.0-0"
+          }
+        }
+      ]
+    }
+  ]
+}
