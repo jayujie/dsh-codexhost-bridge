@@ -1,0 +1,60 @@
+  async dshKeepalive(input) {
+    if (this.#phase !== "open" || this.#active || this.#acceptingTurn || this.#configurationTask || this.#readingHistory || this.hasBackgroundWork()) throw new Error("Claude session is busy");
+    if (!input || !/^OK(?:[1-9]\d{0,15})?$/.test(input.expectedReply ?? "") || !Number.isFinite(input.maxCostUsd) || input.maxCostUsd <= 0 || input.maxCostUsd > 1) throw new Error("Invalid keepalive request");
+    this.#readingHistory = true;
+    try {
+      const messages = await this.#readSessionMessages({ cwd: this.#cwd, sessionId: this.#sessionId });
+      const last = messages?.filter(m => !m.isSidechain && m.parent_tool_use_id == null && (m.type === "assistant" || m.type === "user")).at(-1);
+      if (last?.type !== "assistant" || last.isApiErrorMessage || last.message?.stop_reason !== "end_turn" || !last.message?.content?.some(b => b.type === "text" && b.text?.trim()) || last.message.content.some(b => b.type === "tool_use")) throw new Error("Claude keepalive requires a completed native assistant reply");
+      const model = last.message.model;
+      if (typeof model !== "string" || !model.startsWith("claude-")) throw new Error("Claude keepalive model is unavailable");
+      const thinking = claudeThinkingConfiguration(this.#requestedThinkingOptionId);
+      const environment = { ...this.#dshEnvironment, ENABLE_PROMPT_CACHING_1H: "1", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8", CLAUDE_CODE_MAX_RETRIES: "0", CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1" };
+      const executable = resolveClaudeCodeExecutable({ environment, ...(environment.CODEXHOST_CLAUDE_COMMAND ? { command: environment.CODEXHOST_CLAUDE_COMMAND } : {}) });
+      let stderrTail = "";
+      const query = k5t({ prompt: "Reply exactly " + input.expectedReply + ". Do not use tools.", options: {
+        cwd: this.#cwd, resume: this.#sessionId, forkSession: true, persistSession: false,
+        model, maxTurns: 1, maxBudgetUsd: input.maxCostUsd,
+        thinking: thinking.enabled ? { type: "adaptive", display: "summarized" } : { type: "disabled" },
+        ...(thinking.effort ? { effort: thinking.effort } : {}),
+        permissionMode: "default",
+        allowDangerouslySkipPermissions: false,
+        settings: { disableAllHooks: true, permissions: { ask: ["*"] } },
+        mcpServers: dshCollaborationMcp(environment),
+        // Match the managed conversation's native tool prefix, not an older
+        // pre-unified-wake tool set. Tool execution remains denied below.
+        ...dshUnifiedWakeOptions(environment),
+        canUseTool: async () => ({ behavior: "deny", message: "Cache keepalive cannot execute tools" }),
+        pathToClaudeCodeExecutable: executable,
+        spawnClaudeCodeProcess: options => {
+          const child = spawn2(options.command, options.args, { cwd: options.cwd, env: codexhostUaEnvironment(options.command, options.env), signal: options.signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+          // Custom SDK spawns must drain stderr themselves. Keep only a bounded
+          // in-memory tail and expose fixed categories, never upstream text/secrets.
+          child.stderr?.on("data", chunk => { stderrTail = (stderrTail + chunk.toString()).slice(-8192); });
+          return child;
+        },
+        env: withNodeRuntimeOnPath({ ...dshCollaborationChildEnvironment(environment), ...dshNativeWebEnvironment(environment), ...dshUnifiedWakeEnvironment(environment), CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT, CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP }),
+        abortController: input.controller,
+      }});
+      const timer = setTimeout(() => input.controller.abort(), 80000);
+      let result;
+      try { for await (const message of query) { if (message.type === "result") result = message; } }
+      catch (error) { throw new Error(this.#dshKeepaliveFailure(error, stderrTail, result)); }
+      finally { clearTimeout(timer); query.close(); }
+      if (!result || result.is_error || result.subtype !== "success") throw new Error(this.#dshKeepaliveFailure(null, stderrTail, result));
+      return { model, replyMatchesExpected: result.result?.trim() === input.expectedReply, usage: result.usage, cacheTtl: "1h", detached: true };
+    } finally { this.#readingHistory = false; }
+  }
+  #dshKeepaliveFailure(error, stderr, result) {
+    const detail = [String(error?.message ?? "").slice(-8192), stderr, ...(Array.isArray(result?.errors) ? result.errors.slice(-4).map(value => String(value).slice(-2048)) : [])].join("\n");
+    if (error?.name === "AbortError") return "Claude keepalive cancelled";
+    if (/Failed to authenticate|\b40[13]\b|authentication failed|unauthorized/i.test(detail)) return "Claude keepalive authentication failed (401/403)";
+    if (/\b429\b|rate.?limit|usage.?limit/i.test(detail)) return "Claude keepalive upstream rate limited (429)";
+    if (result?.subtype === "error_max_budget_usd") return "Claude keepalive budget exceeded";
+    if (/No conversation found|session.{0,30}not found/i.test(detail)) return "Claude keepalive resume session not found";
+    if (/\b400\b|invalid_request_error/i.test(detail)) return /max_tokens|budget_tokens/i.test(detail) ? "Claude keepalive token parameters rejected (400)" : "Claude keepalive upstream rejected request (400)";
+    if (/\b(?:500|502|503|504|529)\b/.test(detail)) return "Claude keepalive upstream service unavailable (5xx)";
+    if (/ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|socket hang up/i.test(detail)) return "Claude keepalive network connection failed";
+    if (/exited with code [1-9]/i.test(detail)) return "Claude keepalive CLI exited unsuccessfully";
+    return "Claude keepalive did not finish successfully";
+  }

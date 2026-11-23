@@ -1,0 +1,24 @@
+    if (request.method === "dsh/claude/keepalive" || request.method === "dsh/claude/keepalive/cancel") {
+      const params = request.params;
+      if (!params || typeof params.threadId !== "string" || typeof params.operationId !== "string") { await this.#writer.json(rpcError(request, -32602, "Invalid keepalive identity")); return; }
+      const key = params.threadId + ":" + params.operationId;
+      if (request.method.endsWith("/cancel")) {
+        this.#dshKeepalive.get(key)?.abort();
+        await this.#writer.json(rpcEnvelope(request, { result: { cancelled: true } })); return;
+      }
+      if (this.#dshKeepalive.has(key)) { await this.#writer.json(rpcError(request, -32080, "Keepalive operation already exists")); return; }
+      const controller = new AbortController(); this.#dshKeepalive.set(key, controller);
+      try {
+        const resolution = await this.#resolveExternalThread(params.threadId);
+        controller.signal.throwIfAborted();
+        if (resolution.kind !== "external" || resolution.thread.harnessId !== "claude-code" || resolution.thread.running || resolution.thread.activeTurnId || resolution.thread.session.hasBackgroundWork?.()) { await this.#writer.json(rpcError(request, -32080, "Claude session is unavailable or busy")); return; }
+        const result = await resolution.thread.session.dshKeepalive({ ...params, controller });
+        await this.#writer.json(rpcEnvelope(request, { result }));
+      } catch (error) {
+        const known = ["Claude session is busy", "Invalid keepalive request", "Claude keepalive requires a completed native assistant reply", "Claude keepalive model is unavailable", "Claude keepalive did not finish successfully", "Claude keepalive cancelled", "Claude keepalive authentication failed (401/403)", "Claude keepalive upstream rate limited (429)", "Claude keepalive budget exceeded", "Claude keepalive resume session not found", "Claude keepalive token parameters rejected (400)", "Claude keepalive upstream rejected request (400)", "Claude keepalive upstream service unavailable (5xx)", "Claude keepalive network connection failed", "Claude keepalive CLI exited unsuccessfully"];
+        const reason = known.includes(error?.message) ? error.message : /Failed to authenticate|\b40[13]\b/.test(String(error?.message)) ? "Claude keepalive authentication failed (401/403)" : error?.name === "AbortError" ? "Claude keepalive cancelled" : "Claude keepalive transport failed";
+        this.#diagnose("DSH keepalive: " + reason);
+        await this.#writer.json(rpcError(request, -32090, reason));
+      } finally { this.#dshKeepalive.delete(key); }
+      return;
+    }

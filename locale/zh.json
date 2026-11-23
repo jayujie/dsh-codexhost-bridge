@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Host",
+    "description": "使用插件自带的本机轻量后端运行 Codex 和 Claude Code。"
+  }
+}

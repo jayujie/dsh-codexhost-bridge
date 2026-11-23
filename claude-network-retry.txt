@@ -1,0 +1,29 @@
+// Main DSH-managed Claude requests only. Auxiliary preheat/title/keepalive stay at zero.
+// The CLI owns the API request and its retries; DSH never replays a Turn or tools.
+function dshClaudeMainRetryEnvironment(environment) {
+  return dshUnifiedWakeEnabled(environment)
+    ? { CLAUDE_CODE_MAX_RETRIES: "2", CLAUDE_CODE_RETRY_WATCHDOG: "0" }
+    : {};
+}
+
+function dshClaudeRetryDecision(message, environment) {
+  if (!dshUnifiedWakeEnabled(environment) || !message || message.type !== "system"
+      || message.subtype !== "api_retry" || message.parent_tool_use_id != null) return null;
+  const status = Number.isInteger(message.error_status) && message.error_status >= 100
+    && message.error_status <= 599 ? message.error_status : null;
+  const attempt = Number.isInteger(message.attempt) ? message.attempt : 0;
+  const delay = Number.isFinite(message.retry_delay_ms) ? message.retry_delay_ms : -1;
+  // Verified CLI 2.1.325 maps statusless APIConnectionError (including ECONNRESET)
+  // to "unknown", not "server_error". SDK omits the low-level socket code: this
+  // is a bounded statusless-error policy, not an exact ECONNRESET-only classifier.
+  // no_response has a separate native retry budget; do not silently opt into it.
+  const allow = message.error_status == null && message.error === "unknown"
+    && message.no_response == null
+    && attempt >= 1 && attempt <= 2 && delay >= 0 && delay <= 10000;
+  return { allow, status, attempt, delay, kind: status === 429 ? "dshQuotaRetryStopped" : "dshApiRetryStopped" };
+}
+
+function dshClaudeRetryLog(decision) {
+  // Fixed metadata only: no prompt, credentials, endpoint or remote error body.
+  return `[DSH Claude] API retry ${decision.allow ? "allowed" : "stopped"}; status=${decision.status ?? "none"}; attempt=${decision.attempt}; delayMs=${decision.delay}\n`;
+}

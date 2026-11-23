@@ -1,0 +1,64 @@
+import { mkdtemp as dshPreheatMkdtemp, rm as dshPreheatRm } from "node:fs/promises";
+import { tmpdir as dshPreheatTmpdir } from "node:os";
+import { join as dshPreheatJoin } from "node:path";
+
+/** Independent account-window probe, never attached to a conversation. */
+async function dshPreheatClaude(environment, input) {
+  const timeoutMs = input?.timeoutMs ?? 60000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000 || !input?.controller) throw new Error("Invalid Claude preheat request");
+  const controller = input.controller;
+  controller.signal.throwIfAborted();
+  let cwd, query;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const launchEnvironment = await withUserShellEnvironment({ ...environment });
+    controller.signal.throwIfAborted();
+    const scoped = dshNativeTitleEnvironment(launchEnvironment, { maxOutputTokens: 8 });
+    const executable = resolveClaudeCodeExecutable({ environment: scoped.environment, ...(scoped.environment.CODEXHOST_CLAUDE_COMMAND ? { command: scoped.environment.CODEXHOST_CLAUDE_COMMAND } : {}) });
+    cwd = await dshPreheatMkdtemp(dshPreheatJoin(dshPreheatTmpdir(), "dsh-claude-preheat-"));
+    controller.signal.throwIfAborted();
+    // The bundled SDK writes this marker synchronously while constructing any query.
+    // Restore only that marker immediately; never patch the shared SDK or its main query.
+    const sdkVersionBefore = process.env.CLAUDE_AGENT_SDK_VERSION;
+    try {
+    query = k5t({ prompt: "Reply exactly hello.", options: {
+      cwd, model: "haiku", effort: "low", thinking: { type: "disabled" }, persistSession: false, systemPrompt: "",
+      tools: [], strictMcpConfig: true, mcpServers: {}, permissionMode: "default",
+      settingSources: ["user"], settings: { disableAllHooks: true, env: scoped.overrides },
+      canUseTool: async () => ({ behavior: "deny", message: "Preheat cannot execute tools" }),
+      maxTurns: 1, maxBudgetUsd: 0.05,
+      pathToClaudeCodeExecutable: executable,
+      spawnClaudeCodeProcess: options => spawn2(options.command, options.args, { cwd: options.cwd, env: codexhostUaEnvironment(options.command, options.env), signal: options.signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }),
+      env: withNodeRuntimeOnPath({ ...scoped.environment, CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT, CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP }),
+      abortController: controller,
+    }});
+    } finally {
+      if (sdkVersionBefore === undefined) delete process.env.CLAUDE_AGENT_SDK_VERSION;
+      else process.env.CLAUDE_AGENT_SDK_VERSION = sdkVersionBefore;
+    }
+    let result, actualModel;
+    for await (const message of query) {
+      controller.signal.throwIfAborted();
+      const model = message?.message?.model;
+      if (typeof model === "string" && /^[-a-zA-Z0-9_.:]{1,128}$/.test(model)) actualModel = model;
+      if (message?.type === "result") { result = message; break; }
+    }
+    controller.signal.throwIfAborted();
+    if (result?.subtype !== "success" || result.is_error || typeof result.result !== "string") throw new Error("Claude preheat did not finish successfully");
+    if (typeof result.model === "string" && /^[-a-zA-Z0-9_.:]{1,128}$/.test(result.model)) actualModel = result.model;
+    const usage = {};
+    for (const key of ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]) {
+      const value = result.usage?.[key];
+      if (Number.isSafeInteger(value) && value >= 0) usage[key] = value;
+    }
+    return { selectedModel: "haiku", model: actualModel ?? "haiku", replyMatchesHello: result.result.trim() === "hello", ...(Object.keys(usage).length ? { usage } : {}), detached: true, cachePolicy: "disabled-client" };
+  } finally {
+    clearTimeout(timer);
+    try { query?.close(); } finally {
+      // Only remove the exact directory returned by this invocation's mkdtemp.
+      if (cwd) await dshPreheatRm(cwd, { recursive: true, force: true });
+    }
+  }
+}
+
+export { dshPreheatClaude };

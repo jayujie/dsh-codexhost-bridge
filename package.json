@@ -1,0 +1,116 @@
+{
+  "name": "dsh-codexhost-bridge",
+  "version": "0.5.0",
+  "description": "DSH (DeepSeek Harness) bridge plugin for Codex, Claude Code, and Antigravity via a plugin-owned local CodexHost backend",
+  "private": false,
+  "type": "module",
+  "main": "./index.mjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "build:client": "node build-client.mjs",
+    "build:backend": "node scripts/setup-backend.mjs",
+    "build": "npm run build:client && npm run build:backend",
+    "test": "node --test test/*.test.mjs",
+    "test:unit": "node scripts/run-unit-tests.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "zod": "^3.24.0"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./protocol": "./protocol.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-permission-presets",
+        "@deepseek-ai/dsh-client-ui-agent-preset",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-api-remote-access"
+      ],
+      "immediately": true
+    }
+  },
+  "files": [
+    "index.mjs",
+    "backend-paths.mjs",
+    "backend/**",
+    "build-backend.mjs",
+    "build-client.mjs",
+    "scripts/**",
+    "antigravity-perf.mjs",
+    "patch-antigravity-perf.mjs",
+    "antigravity-collaboration.mjs",
+    "patch-antigravity-collaboration.mjs",
+    "claude-catalog-cache.mjs",
+    "claude-503-relay.mjs",
+    "claude-efforts.mjs",
+    "claude-native-web.txt",
+    "claude-*.txt",
+    "patch-claude-*.mjs",
+    "patch-host-*.mjs",
+    "*-rpc-backend.txt",
+    "autonomous-team-collaboration.mjs",
+    "host-collaboration.mjs",
+    "host-installation.mjs",
+    "host-usage-totals.mjs",
+    "live-token-usage.mjs",
+    "local-model-prices.mjs",
+    "build-local-prices.mjs",
+    "native-*.mjs",
+    "owned-host-runtime.mjs",
+    "console-*.mjs",
+    "delegation-*.mjs",
+    "external-engines.mjs",
+    "harness-route.mjs",
+    "codex-permissions.mjs",
+    "permission-presentation.mjs",
+    "thinking-options.mjs",
+    "preset-view.mjs",
+    "protocol.mjs",
+    "rejected-start.mjs",
+    "remote-contract.mjs",
+    "runtime-client.mjs",
+    "session-api-cost.mjs",
+    "slider-runtime.mjs",
+    "slider-licenses/**",
+    "workspace-file-paths.mjs",
+    "client.mjs",
+    "client.js",
+    "icons.mjs",
+    "assets/*",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "vendor/**"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jayujie/dsh-codexhost-bridge.git"
+  },
+  "homepage": "https://github.com/jayujie/dsh-codexhost-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/jayujie/dsh-codexhost-bridge/issues"
+  },
+  "license": "MIT"
+}

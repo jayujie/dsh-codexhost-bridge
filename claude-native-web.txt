@@ -1,0 +1,4 @@
+// Native search and page-summary helpers need the same Claude Code beta as main requests.
+function dshNativeWebEnvironment(environment) {
+  return { ANTHROPIC_BETAS: [...new Set([...(environment.ANTHROPIC_BETAS ?? "").split(",").map(value => value.trim()).filter(Boolean), "claude-code-20250219"])].join(",") };
+}

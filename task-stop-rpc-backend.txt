@@ -1,0 +1,19 @@
+    if (request.method === "dsh/host/task/stop") {
+      const params = request.params;
+      const byItem = typeof params?.itemId === "string" && params.itemId.length > 0 && params.itemId.length <= 1024;
+      const byAgent = typeof params?.agentId === "string" && params.agentId.length > 0 && params.agentId.length <= 1024;
+      if (!params || typeof params.threadId !== "string" || byItem === byAgent) { await this.#writer.json(rpcError(request, -32602, "Invalid background task identity")); return; }
+      try {
+        const resolution = await this.#resolveExternalThread(params.threadId);
+        if (resolution.kind !== "external" || resolution.thread.harnessId !== "claude-code" || typeof resolution.thread.session.dshStopNativeTask !== "function") { await this.#writer.json(rpcError(request, -32076, "This Agent does not support stopping one background task")); return; }
+        const taskId = byAgent ? this.#dshNativeSubagents.get(params.threadId + "\u0000" + params.agentId) ?? params.agentId : void 0;
+        const result = await resolution.thread.session.dshStopNativeTask(byItem ? { itemId: params.itemId } : { taskId });
+        if (!result.ok) { await this.#writer.json(rpcError(request, -32083, result.error.message)); return; }
+        // The native task notification settles the Item; this reply only confirms the request.
+        await this.#writer.json(rpcEnvelope(request, { result: { requested: true } }));
+      } catch (error) {
+        this.#diagnose("DSH task stop: " + (error?.message ?? String(error)));
+        await this.#writer.json(rpcError(request, -32083, "Background task stop failed"));
+      }
+      return;
+    }

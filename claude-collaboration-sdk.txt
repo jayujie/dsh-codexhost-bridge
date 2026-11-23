@@ -1,0 +1,39 @@
+function dshCollaborationMcp(environment) {
+  if (!environment.DSH_COLLABORATION_URL || !environment.DSH_COLLABORATION_TOKEN || !environment.CODEXHOST_THREAD_ID) return {};
+  const tools = [{ name: "dsh_collaboration", description: "Use the current DSH subagent tree and shared task board. First call name=__list__, arguments={} to discover admitted tools, then invoke them. Never use the separate Host delegation CLI.", inputSchema: { type: "object", properties: { name: { type: "string" }, arguments: { type: "object", additionalProperties: true } }, required: ["name", "arguments"], additionalProperties: false } }];
+  const unified = typeof dshUnifiedWakeEnabled === "function" && dshUnifiedWakeEnabled(environment);
+  if (unified) tools.push(NATIVE_BACKGROUND_SCHEMA);
+  const instance = {
+    async connect(transport) {
+      transport.onmessage = async message => {
+        if (message.id === undefined) return;
+        let result;
+        try {
+          if (message.method === "initialize") result = { protocolVersion: message.params?.protocolVersion ?? "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "dsh-collaboration", version: "1.0.0" } };
+          else if (message.method === "tools/list") result = { tools };
+          else if (message.method === "ping") result = {};
+          else if (message.method === "tools/call") {
+            const background = message.params?.name === "dsh_background" && unified;
+            if (!background && message.params?.name !== "dsh_collaboration") throw new Error("Unknown collaboration tool");
+            const args = message.params.arguments;
+            const operation = background ? nativeBackgroundOperation(args) : { name: args?.name, arguments: args?.arguments };
+            const response = await fetch(environment.DSH_COLLABORATION_URL, { method: "POST", redirect: "error", headers: { "content-type": "application/json", authorization: "Bearer " + environment.DSH_COLLABORATION_TOKEN }, body: JSON.stringify({ threadId: environment.CODEXHOST_THREAD_ID, id: (background ? "claude-background:" : "claude-mcp:") + String(message.id), ...operation, ...(background ? { channel: "background" } : {}) }) });
+            if (!response.ok) throw new Error("Collaboration bridge denied request");
+            result = await response.json();
+          } else { await transport.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }); return; }
+          await transport.send({ jsonrpc: "2.0", id: message.id, result });
+        } catch {
+          await transport.send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "DSH collaboration failed or was denied. Do not automatically replay a task or message mutation." }] } });
+        }
+      };
+      await transport.start();
+    }
+  };
+  return { "dsh-collaboration": { type: "sdk", name: "dsh-collaboration", instance } };
+}
+function dshCollaborationPermission(toolName, input, environment) {
+  if ((toolName === "mcp__dsh-collaboration__dsh_collaboration" || (toolName === "mcp__dsh-collaboration__dsh_background" && typeof dshUnifiedWakeEnabled === "function" && dshUnifiedWakeEnabled(environment))) && environment.DSH_COLLABORATION_URL && environment.DSH_COLLABORATION_TOKEN) return { behavior: "allow", updatedInput: input };
+}
+function dshCollaborationChildEnvironment(environment) {
+  return { ...environment, DSH_UNIFIED_WAKE: undefined, DSH_COLLABORATION_URL: undefined, DSH_COLLABORATION_TOKEN: undefined, DSH_WEB_BRIDGE_URL: undefined, DSH_WEB_BRIDGE_TOKEN: undefined };
+}

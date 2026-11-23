@@ -1,0 +1,45 @@
+/** Title-only child settings; never mutate the live conversation's environment or SDK. */
+function dshNativeTitleEnvironment(environment, input) {
+  const overrides = {
+    DISABLE_PROMPT_CACHING: "1",
+    ENABLE_PROMPT_CACHING_1H: "0",
+    CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(input.maxOutputTokens),
+    CLAUDE_CODE_MAX_RETRIES: "0",
+    ANTHROPIC_BETAS: [...new Set([...(environment.ANTHROPIC_BETAS ?? "").split(",").map(value => value.trim()).filter(Boolean), "claude-code-20250219"])].join(","),
+  };
+  return { environment: { ...dshCollaborationChildEnvironment(environment), ...overrides }, overrides };
+}
+
+async function dshGenerateNativeTitle(environment, input) {
+  if (!input || typeof input.description !== "string" || !input.description.trim() || Buffer.byteLength(input.description) > 65536 || typeof input.model !== "string" || !input.model.startsWith("claude-") || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 128 || input.maxOutputTokens > 4096 || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1000 || input.timeoutMs > 60000 || !Number.isFinite(input.maxCostUsd) || input.maxCostUsd <= 0 || input.maxCostUsd > 1) throw new Error("Invalid native title request");
+  input.controller.signal.throwIfAborted();
+  const scoped = dshNativeTitleEnvironment(environment, input);
+  const executable = resolveClaudeCodeExecutable({ environment: scoped.environment, ...(scoped.environment.CODEXHOST_CLAUDE_COMMAND ? { command: scoped.environment.CODEXHOST_CLAUDE_COMMAND } : {}) });
+  const gate = Promise.withResolvers();
+  async function* noMainPrompt() { await gate.promise; }
+  const query = k5t({ prompt: noMainPrompt(), options: {
+    cwd: input.cwd, persistSession: false, model: input.model,
+    tools: [], strictMcpConfig: true, mcpServers: {}, permissionMode: "plan",
+    settings: { disableAllHooks: true, env: scoped.overrides },
+    canUseTool: async () => ({ behavior: "deny", message: "Title generation cannot execute tools" }),
+    maxTurns: 1, maxBudgetUsd: input.maxCostUsd,
+    pathToClaudeCodeExecutable: executable,
+    spawnClaudeCodeProcess: options => spawn2(options.command, options.args, { cwd: options.cwd, env: codexhostUaEnvironment(options.command, options.env), signal: options.signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }),
+    env: withNodeRuntimeOnPath({ ...scoped.environment, CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT, CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP }),
+    abortController: input.controller,
+  }});
+  const timer = setTimeout(() => input.controller.abort(), input.timeoutMs);
+  try {
+    await query.initializationResult();
+    input.controller.signal.throwIfAborted();
+    // The ordinary SDK helper remains disabled; this explicit control is restricted
+    // to the independent, no-cache title child above, never the main transport.
+    const result = await query.request({ subtype: "generate_session_title", description: input.description, persist: false });
+    const title = result?.response?.title;
+    if (typeof title !== "string" || !title.trim() || Buffer.byteLength(title) > 512) throw new Error("Native title did not finish successfully");
+    return { title: title.trim(), detached: true, cachePolicy: "disabled-client" };
+  } finally { clearTimeout(timer); gate.resolve(); query.close(); }
+}
+
+export { dshGenerateNativeTitle };

@@ -1,0 +1,5 @@
+  async dshGenerateTitle(input) {
+    if (this.#phase !== "open" || this.#active || this.#acceptingTurn || this.#configurationTask || this.hasBackgroundWork()) throw new Error("Claude session is busy");
+    // Independent transport: do not set #readingHistory or touch the main query.
+    return dshGenerateNativeTitle(this.#dshEnvironment, { ...input, cwd: this.#cwd });
+  }

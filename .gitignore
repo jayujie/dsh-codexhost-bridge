@@ -1,0 +1,9 @@
+node_modules/
+# Upstream CodexHost patched runtime & adapter bundles are built locally via
+# `npm run build:backend` rather than redistributed directly in this repository.
+backend/
+*.bak
+*.bak-*
+*.log
+.DS_Store
+Thumbs.db

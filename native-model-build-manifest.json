@@ -1,0 +1,13 @@
+{
+  "source": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+  "sourceSha256": "d20c4a1a80a6548063a9f771588e4fe9e1937af18ddd50709d3bc58eeae5f9ab",
+  "patchedSha256": "91f31b1b5a35b11c093c298c316134fb582c2d5cb3d0eff9ee2a82cd90083947",
+  "outputSha256": "cb0362a8c51442867a9032167abfb3d3bea55e8cc713ba8d002e9199d0a8f56a",
+  "adaptation": "optional EffortPane renderer; upstream model UI and CSS retained",
+  "inputs": [
+    "C:/Users/example/work/dsh-live-upgrade-20261105/profile-stage/node_modules/clsx/dist/clsx.mjs",
+    "../../client/ui-model-selection/src/client/ModelSelect.module.css",
+    "../../client/ui-model-selection/src/client/provider-order.ts",
+    "../../client/ui-model-selection/src/client/ModelSelect.tsx"
+  ]
+}

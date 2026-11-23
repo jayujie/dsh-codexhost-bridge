@@ -1,0 +1,29 @@
+    if (request.method === "dsh/claude/preheat" || request.method === "dsh/claude/preheat/cancel") {
+      const params = request.params;
+      if (!params || Object.keys(params).some(key => !["operationId", "timeoutMs"].includes(key)) || typeof params.operationId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(params.operationId) || (params.timeoutMs !== undefined && (!Number.isSafeInteger(params.timeoutMs) || params.timeoutMs < 1000 || params.timeoutMs > 60000))) {
+        await this.#writer.json(rpcError(request, -32602, "Invalid Claude preheat request")); return;
+      }
+      const key = params.operationId.toLowerCase();
+      if (request.method.endsWith("/cancel")) {
+        const controller = this.#dshPreheats.get(key);
+        controller?.abort();
+        await this.#writer.json(rpcEnvelope(request, { result: { cancelled: !!controller } })); return;
+      }
+      if (this.#desktopInputEnded || this.#pluginLoadAbort.signal.aborted || this.#dshPreheats.size) {
+        await this.#writer.json(rpcError(request, -32080, "Claude preheat is unavailable or busy")); return;
+      }
+      const controller = new AbortController(); this.#dshPreheats.set(key, controller);
+      try {
+        const { dshPreheatClaude } = await import(new URL("./plugins/claude-code/plugin.mjs", import.meta.url).href);
+        controller.signal.throwIfAborted();
+        const result = await dshPreheatClaude(this.#options.environment ?? process.env, { controller, timeoutMs: params.timeoutMs });
+        controller.signal.throwIfAborted();
+        await this.#writer.json(rpcEnvelope(request, { result }));
+      } catch (error) {
+        const known = ["Invalid Claude preheat request", "Claude preheat did not finish successfully"];
+        const reason = controller.signal.aborted ? "Claude preheat cancelled or timed out" : known.includes(error?.message) ? error.message : "Claude preheat transport failed";
+        this.#diagnose("DSH preheat: " + reason);
+        await this.#writer.json(rpcError(request, -32091, reason));
+      } finally { this.#dshPreheats.delete(key); }
+      return;
+    }

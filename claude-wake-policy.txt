@@ -1,0 +1,46 @@
+// Only the DSH-managed root transport receives this private opt-in marker.
+// The CLI child receives neither bridge credentials nor authority to opt itself in.
+function dshUnifiedWakeEnabled(environment) {
+  if (!environment || environment.DSH_UNIFIED_WAKE !== "1") return false;
+  if (typeof environment.DSH_COLLABORATION_TOKEN !== "string" || !/^[a-f0-9]{64}$/i.test(environment.DSH_COLLABORATION_TOKEN)) return false;
+  if (typeof environment.CODEXHOST_THREAD_ID !== "string" || !/^[^\s\u0000-\u001f\u007f]{1,1024}$/u.test(environment.CODEXHOST_THREAD_ID)) return false;
+  if (typeof environment.DSH_COLLABORATION_URL !== "string") return false;
+  try {
+    const url = new URL(environment.DSH_COLLABORATION_URL);
+    return url.protocol === "http:" && url.hostname === "127.0.0.1"
+      && /^[1-9]\d{0,4}$/.test(url.port) && Number(url.port) <= 65535
+      && url.pathname === "/collaboration" && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+function dshUnifiedWakeEnvironment(environment) {
+  return dshUnifiedWakeEnabled(environment)
+    ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", CLAUDE_CODE_MAX_RETRIES: "0" }
+    : {};
+}
+
+function dshUnifiedWakeOptions(environment) {
+  if (!dshUnifiedWakeEnabled(environment)) return {};
+  return {
+    disallowedTools: ["Agent", "Task", "Workflow", "ScheduleWakeup"],
+    hooks: {
+      PreToolUse: [{
+        matcher: "Bash|Agent|Task|Workflow|ScheduleWakeup",
+        hooks: [async input => {
+          const name = input?.tool_name;
+          const backgroundBash = name === "Bash" && input?.tool_input?.run_in_background === true;
+          if (!backgroundBash && !["Agent", "Task", "Workflow", "ScheduleWakeup"].includes(name)) return {};
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: backgroundBash
+                ? "Native background Bash is disabled for this DSH-managed session. Use the DSH MCP dsh_background tool to start background work; DSH owns its completion notification. This command was not started."
+                : "Native autonomous/delegated work is disabled for this DSH-managed session. Use DSH MCP dsh_collaboration with name=\"subagent\" for delegation and dsh_background for commands. This work was not started."
+            }
+          };
+        }]
+      }]
+    }
+  };
+}

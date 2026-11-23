@@ -1,0 +1,24 @@
+    if (request.method === "dsh/claude/title/generate" || request.method === "dsh/claude/title/cancel") {
+      const params = request.params;
+      if (!params || typeof params.threadId !== "string" || typeof params.operationId !== "string" || !params.operationId || params.operationId.length > 256) { await this.#writer.json(rpcError(request, -32602, "Invalid title operation identity")); return; }
+      const key = params.threadId + ":" + params.operationId;
+      if (request.method.endsWith("/cancel")) {
+        this.#dshTitles.get(key)?.abort();
+        await this.#writer.json(rpcEnvelope(request, { result: { cancelled: true } })); return;
+      }
+      if (this.#dshTitles.has(key)) { await this.#writer.json(rpcError(request, -32080, "Title operation already exists")); return; }
+      const controller = new AbortController(); this.#dshTitles.set(key, controller);
+      try {
+        const resolution = await this.#resolveExternalThread(params.threadId);
+        controller.signal.throwIfAborted();
+        if (resolution.kind !== "external" || resolution.thread.harnessId !== "claude-code" || resolution.thread.running || resolution.thread.activeTurnId || resolution.thread.session.hasBackgroundWork?.()) { await this.#writer.json(rpcError(request, -32080, "Claude session is unavailable or busy")); return; }
+        const result = await resolution.thread.session.dshGenerateTitle({ ...params, controller });
+        await this.#writer.json(rpcEnvelope(request, { result }));
+      } catch (error) {
+        const known = ["Claude session is busy", "Invalid native title request", "Native title did not finish successfully"];
+        const reason = known.includes(error?.message) ? error.message : error?.name === "AbortError" ? "Claude title generation cancelled" : "Claude title generation transport failed";
+        this.#diagnose("DSH title: " + reason);
+        await this.#writer.json(rpcError(request, -32091, reason));
+      } finally { this.#dshTitles.delete(key); }
+      return;
+    }

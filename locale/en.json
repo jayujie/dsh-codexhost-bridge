@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Host",
+    "description": "Run Codex and Claude Code with the plugin-owned local backend."
+  }
+}
