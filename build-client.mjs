@@ -23,7 +23,9 @@ let client = await readFile(new URL('./client.mjs', import.meta.url), 'utf8')
 const imports = client.match(/^import .*$/gm) ?? []
 if (imports.length !== 15) throw new Error('Update the explicit client build when its imports change')
 client = client.replace(/^import .*\r?\n/gm, '').replace(/^export /gm, '')
-let body = `window.__ModuleLoader__.load({id:"@local/dsh-codexhost-bridge",factory:require=>{\nconst React=require("react"),ReactDOM=require("react-dom"),UiPrimitives=require("@deepseek-ai/dsh-client-ui-primitives");\nconst {createElement:h,useEffect,useRef,useState,useSyncExternalStore}=React;\nconst {createPortal}=ReactDOM;\nconst {Button:DshConsoleButton,Menu,RiskConfirmation,IconDatabaseOutlineRegular,IconChevronDownOutlineRegular,PermissionIconReadOnlyRegular,PermissionIconWorkspaceWriteRegular,PermissionIconFullAccessRegular}=UiPrimitives;\nconst AGENT_ICONS=${JSON.stringify(icons)};\n${contract}\n${consoleModules.join('\n')}\n${client}\nconst exports={inject,apply};Object.defineProperty(exports,Symbol.toStringTag,{value:"Module"});return exports;\n}});\n`
+const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
+const packageId = pkg.name || 'dsh-host'
+let body = `window.__ModuleLoader__.load({id:${JSON.stringify(packageId)},factory:require=>{\nconst React=require("react"),ReactDOM=require("react-dom"),UiPrimitives=require("@deepseek-ai/dsh-client-ui-primitives");\nconst {createElement:h,useEffect,useRef,useState,useSyncExternalStore}=React;\nconst {createPortal}=ReactDOM;\nconst {Button:DshConsoleButton,Menu,RiskConfirmation,IconDatabaseOutlineRegular,IconChevronDownOutlineRegular,PermissionIconReadOnlyRegular,PermissionIconWorkspaceWriteRegular,PermissionIconFullAccessRegular}=UiPrimitives;\nconst AGENT_ICONS=${JSON.stringify(icons)};\n${contract}\n${consoleModules.join('\n')}\n${client}\nconst exports={inject,apply};Object.defineProperty(exports,Symbol.toStringTag,{value:"Module"});return exports;\n}});\n`
 const esbuild = await loadEsbuild()
 if (esbuild?.transform) {
   body = (await esbuild.transform(body, { loader: 'js', target: 'es2022', minify: true, legalComments: 'none' })).code

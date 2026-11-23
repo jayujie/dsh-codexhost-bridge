@@ -10,8 +10,37 @@ import { installNativeDelegation } from './native-delegation.mjs'
 import { installCollaborationBridge } from './host-collaboration.mjs'
 import path from 'node:path'
 
-export const name = 'codexhost-bridge'
+export const name = 'dsh-host'
 export const inject = ['loader', 'agents', 'agentPresets', 'agentLoop', 'sessionPersistence', 'sessionProjections', 'typert', 'workspaceRegistry', 'tools', 'subagents']
+
+let Config
+try {
+  const schemastery = await import('@deepseek-ai/schemastery')
+  const z = schemastery.default ?? schemastery
+  if (typeof z?.object === 'function') {
+    Config = z.object({
+      autoStartHost: z.boolean().default(true).description('Automatically start the local DSH Host background process on demand.'),
+      idleReleaseMinutes: z.number().step(1).min(5).max(1440).default(30).description('Release idle external engine sessions after this many minutes.'),
+      nativeTurnTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(600_000).description('Maximum wait time for one external engine turn (ms).'),
+      nativeCancelTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(10_000).description('Maximum wait time to cancel an active external turn (ms).'),
+      hostStartTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(30_000).description('Maximum wait time for the background Host process to become ready (ms).'),
+      generateMissingTitles: z.boolean().default(true).description('Automatically generate concise titles for external engine sessions.'),
+      nativeClaudeTitles: z.boolean().default(true).description('Use an isolated native Claude session for Claude Code titles.'),
+      claudeTitleModel: z.string().default('claude-haiku-5-5').description('Native Claude model used for title generation.'),
+      claudeTitleMaxOutputTokens: z.number().step(1).min(128).max(4096).default(512).description('Maximum output tokens for native Claude title generation.'),
+      claudeTitleTimeoutMs: z.number().step(1).min(1000).max(60_000).default(30_000).description('Timeout for native Claude title generation (ms).'),
+      claudeTitleMaxCostUsd: z.number().min(0.001).max(1).default(0.05).description('Cost cap per native Claude title generation (USD).'),
+      nativeInteractionApprovals: z.boolean().default(true).description('Bridge native tool approval and user question prompts into DSH.'),
+      hostNodePath: z.string().description('Optional absolute path to node.exe used for the background Host.'),
+      stockCodexPath: z.string().description('Optional absolute path to codex.exe.'),
+      hostRuntimePath: z.string().description('Optional absolute path to a custom patched host-runtime.mjs.'),
+      backendDataDir: z.string().description('Optional absolute path for DSH Host data and runtime cache.'),
+      legacyHostDataDir: z.string().description('Optional absolute path to an existing ~/.codexhost data directory.'),
+      descriptorPath: z.string().description('Optional absolute path for the local bridge descriptor JSON.'),
+    })
+  }
+} catch {}
+export { Config }
 
 export async function apply(ctx, config = {}) {
   const observations = await installObservationProjection(ctx)

@@ -97,7 +97,7 @@ test('the Antigravity adapter is pinned, enabled and allow-listed in the runtime
   const plugin = JSON.parse(await read('backend/plugins/antigravity/manifest.json'))
   assert.equal(plugin.id, 'antigravity')
   assert.ok((await read('backend/host-runtime.mjs')).includes('new Set(["claude-code", "antigravity", "codex-usage", "deepseek-harness"])'))
-  const source = await read('build-backend.mjs')
+  const source = await read('backend-builder.mjs')
   assert.ok(source.includes(manifest.adapterPins.antigravity), 'build script and manifest agree on the pin')
 })
 

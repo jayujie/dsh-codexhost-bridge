@@ -1,4 +1,4 @@
-export const CONSOLE_REMOTE_PACKAGE = '@local/dsh-codexhost-bridge/console'
+export const CONSOLE_REMOTE_PACKAGE = 'dsh-host/console'
 const actions = {
   overview: [], connections: ['refresh'], accounts: ['refresh'],
   sessions: ['harnessId', 'query', 'cursor', 'offset'],

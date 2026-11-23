@@ -1,6 +1,11 @@
+# DSH Host bundle patch.
+# Installed automatically when adding `dsh-host` via DSH Plugin Market, Plugin Manager, or `dsh plugin add`.
+# The disabled expression prevents double-mounting if a local dev copy (`@local/dsh-codexhost-bridge`)
+# or another aggregate bundle already mounts this plugin.
 - insert:
-    - id: codexhost-bridge
-      name: '@local/dsh-codexhost-bridge'
+    - id: dsh-host
+      name: 'dsh-host'
+      disabled: !!js "[...ctx.loader.entries()].some((e) => (e.options.name === 'dsh-host' || e.options.name === '@local/dsh-codexhost-bridge') && e.options.id !== 'dsh-host' && !e.disabled)"
       config:
         nativeTurnTimeoutMs: 600000
         nativeCancelTimeoutMs: 10000

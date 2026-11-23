@@ -111,7 +111,7 @@ test('package and build inputs no longer reference deleted web bridge files', as
   for (const name of ['native-search.test.mjs', 'claude-web.test.mjs']) {
     await assert.rejects(access(new URL(name, import.meta.url)), { code: 'ENOENT' })
   }
-  const build = await read('build-backend.mjs')
+  const build = await read('backend-builder.mjs')
   assert.match(build, /claude-native-web\.txt/)
   assert.doesNotMatch(build, /claude-web-sdk\.txt|claude-web-bridge\.mjs|dshWebMcp|dshNativeSearchEnvironment/)
 })

@@ -69,5 +69,5 @@ test('shutdown aborts pending work and rejects subsequent preheat',async()=>{
  const started=Promise.withResolvers();const f=rpcFixture(async(_,{controller})=>{started.resolve();return new Promise((resolve,reject)=>controller.signal.addEventListener('abort',()=>reject(controller.signal.reason),{once:true}))});const pending=f.host.run(request());await started.promise;f.host.stop();await pending;await f.host.run(request());assert.equal(f.writes.at(-1).error.code,-32080);assert.equal(f.host.size,0)
 })
 test('build wires dynamic exported executor and abort-before-drain without touching title/keepalive snippets',async()=>{
- const build=await readFile(new URL('../build-backend.mjs',import.meta.url),'utf8');assert.ok(build.includes('preheat-rpc-backend.txt'));assert.ok(build.includes('claude-preheat-sdk.txt'));assert.ok(build.includes('for (const controller of this.#dshPreheats.values()) controller.abort();'));assert.ok(rpc.includes('./plugins/claude-code/plugin.mjs'))
+ const build=await readFile(new URL('../backend-builder.mjs',import.meta.url),'utf8');assert.ok(build.includes('preheat-rpc-backend.txt'));assert.ok(build.includes('claude-preheat-sdk.txt'));assert.ok(build.includes('for (const controller of this.#dshPreheats.values()) controller.abort();'));assert.ok(rpc.includes('./plugins/claude-code/plugin.mjs'))
 })

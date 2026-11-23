@@ -10,7 +10,7 @@ test('client artifact mounts native remotes and additive Composer controls witho
     Symbol,
     window: { __ModuleLoader__: { load(value) { loaded = value } } },
   })
-  assert.equal(loaded.id, '@local/dsh-codexhost-bridge')
+  assert.equal(loaded.id, 'dsh-host')
   const module = loaded.factory((name) => {
     if (name === 'react') return {
       createElement: (...args) => args,

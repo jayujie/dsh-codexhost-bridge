@@ -1,4 +1,4 @@
-export const REMOTE_PACKAGE = '@local/dsh-codexhost-bridge/native'
+export const REMOTE_PACKAGE = 'dsh-host/native'
 
 function object(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected an object')

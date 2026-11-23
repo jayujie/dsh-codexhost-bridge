@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { HostConnectionError } from './native-host-client.mjs'
 import { bundledHostRuntimePath, hostDescriptorPath } from './backend-paths.mjs'
+import { ensureProvisionedBackend } from './backend-builder.mjs'
 
 export const defaultDescriptorPath = () => hostDescriptorPath()
 
@@ -38,18 +39,34 @@ export async function resolveHostInstallation(config = {}) {
   const descriptor = await readHostDescriptor(hostDescriptorPath(config))
   const local = process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Local')
   const appdata = process.env.APPDATA ?? path.join(homedir(), 'AppData', 'Roaming')
-  const runtimePath = config.hostRuntimePath ?? bundledHostRuntimePath()
-  const nodes = [descriptor?.nodePath,
+  const dshHome = process.env.DSH_HOME ?? path.join(homedir(), '.dsh')
+  let runtimePath = config.hostRuntimePath ?? bundledHostRuntimePath()
+  if (config.hostRuntimePath === undefined && !await file(runtimePath)) {
+    const provisioned = await ensureProvisionedBackend(config).catch(() => undefined)
+    if (provisioned) runtimePath = provisioned
+  }
+  const currentNode = /^node(?:\.exe)?$/i.test(path.basename(process.execPath)) ? process.execPath : undefined
+  const nodes = [
+    descriptor?.nodePath,
+    path.join(dshHome, 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
+    currentNode,
     ...await newestFiles(path.join(local, 'CodexHostRuntime'), 'node.exe'),
     ...await newestFiles(path.join(local, 'Packages', 'OpenAI.Codex_2p2nqsd0c76g0', 'LocalCache', 'Local', 'CodexHostRuntime'), 'node.exe'),
     ...((process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, 'node.exe'))),
   ]
   let nodePath = config.hostNodePath
   if (nodePath === undefined) for (const candidate of nodes) if (await file(candidate)) { nodePath = candidate; break }
-  const stockCandidates = await newestFiles(path.join(local, 'OpenAI', 'Codex', 'bin'), 'codex.exe')
-  const stockCodexPath = config.stockCodexPath ?? process.env.CODEXHOST_STOCK_CODEX_PATH ?? stockCandidates[0]
+  const stockCandidates = [
+    ...await newestFiles(path.join(local, 'OpenAI', 'Codex', 'bin'), 'codex.exe'),
+    path.join(local, 'OpenAI', 'Codex', 'bin', 'codex.exe'),
+    path.join(appdata, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'),
+    path.join(appdata, 'npm', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'),
+    ...((process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, 'codex.exe'))),
+  ]
+  let stockCodexPath = config.stockCodexPath ?? process.env.CODEXHOST_STOCK_CODEX_PATH
+  if (stockCodexPath === undefined) for (const candidate of stockCandidates) if (await file(candidate)) { stockCodexPath = candidate; break }
   for (const [key, value] of Object.entries({ hostNodePath: nodePath, hostRuntimePath: runtimePath })) {
-    if (!await file(value)) throw new HostConnectionError('HOST_INSTALLATION_MISSING', `CodexHost installation file is unavailable: ${key}. Configure its actual path in the plugin settings.`)
+    if (!await file(value)) throw new HostConnectionError('HOST_INSTALLATION_MISSING', `DSH Host installation file is unavailable: ${key}. Reinstall dsh-host (or install @codexhost/cli-win32-x64@0.17.4) or configure its path in plugin settings.`)
   }
   const appDirectory = path.dirname(runtimePath)
   const npmCandidates = [process.env.npm_execpath, ...((process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, 'node_modules', 'npm', 'bin', 'npm-cli.js')))]
@@ -65,6 +82,6 @@ export async function resolveHostInstallation(config = {}) {
 }
 
 export async function requireStockCodex(installation) {
-  if (!await file(installation.stockCodexPath)) throw new HostConnectionError('HOST_CODEX_MISSING', 'The installed Codex CLI could not be found. Configure stockCodexPath before starting the background Host.')
+  if (!await file(installation.stockCodexPath)) throw new HostConnectionError('HOST_CODEX_MISSING', 'The installed Codex CLI could not be found. Install @openai/codex or configure stockCodexPath in plugin settings before starting the background Host.')
   return installation.stockCodexPath
 }
