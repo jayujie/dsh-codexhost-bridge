@@ -90,6 +90,30 @@ function dhRefresh(state, reload, label = '刷新') { return h('div', { classNam
 
 function ConsolePanel({ consoleRemote, openSession }) {
   const [tab, setTab] = useState('overview')
+  const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState({ checking: false, data: null, error: '', applying: false, applied: null })
+  const checkUpdate = (refresh = false) => {
+    setUpdate(u => ({ ...u, checking: true, error: '' }))
+    consoleRemote.request({ action: 'updateCheck', ...(refresh ? { refresh: true } : {}) }).then(dhReply)
+      .then(data => setUpdate(u => ({ ...u, checking: false, data, error: '' })))
+      .catch(error => setUpdate(u => ({ ...u, checking: false, error: refresh ? error.message : '' })))
+  }
+  const applyUpdate = () => {
+    const target = update.data?.latestVersion
+    setUpdate(u => ({ ...u, applying: true, error: '', applied: null }))
+    consoleRemote.request({ action: 'updateApply', ...(target ? { version: target } : {}) }).then(dhReply)
+      .then(applied => setUpdate(u => ({ ...u, applying: false, applied, error: '' })))
+      .catch(error => setUpdate(u => ({ ...u, applying: false, error: error.message })))
+  }
+  useEffect(() => {
+    let active = true
+    consoleRemote.bootstrap?.().then(dhReply).then(info => { if (active && info?.version) setVersion(String(info.version)) }).catch(() => {})
+    consoleRemote.request({ action: 'updateCheck' }).then(dhReply)
+      .then(data => { if (active) setUpdate(u => ({ ...u, data })) }).catch(() => {})
+    return () => { active = false }
+  }, [consoleRemote])
+  const info = update.data
+  const displayVersion = version || info?.currentVersion || '0.6.1'
   return h('section', { className: 'dh-console', 'aria-label': 'DSH Host 控制台' },
     h('header', { className: 'dh-header' },
       h('div', { className: 'dh-header-lead' },
@@ -97,9 +121,23 @@ function ConsolePanel({ consoleRemote, openSession }) {
         h('div', null,
           h('div', { className: 'dh-brand' }, h('h1', null, 'DSH Host')),
           h('p', null, '在 DSH 中统一管理 Codex、Claude Code 与 Antigravity'))),
-      h('span', { className: 'dh-chip' }, h('span', { className: 'dh-dot dh-dot-ok', 'aria-hidden': true }), '本机 · 0.4.6')),
+      h('div', { className: 'dh-header-meta' },
+        h('span', { className: `dh-chip ${info?.updateAvailable ? 'dh-chip-update' : ''}`.trim() },
+          h('span', { className: `dh-dot ${info?.updateAvailable ? 'dh-dot-warn' : 'dh-dot-ok'}`, 'aria-hidden': true }),
+          info?.updateAvailable ? `可更新 · v${info.latestVersion}` : `本机 · v${displayVersion}`),
+        dhButton(update.checking ? '检查中…' : '检查更新', () => checkUpdate(true), { disabled: update.checking || update.applying, className: 'dh-update-check-btn' }))),
     h('nav', { className: 'dh-tabs', 'aria-label': '控制台导航' },
       dhTabs.map(([id, label]) => dhButton(h('span', { className: 'dh-tab-label' }, h(DhTabIcon, { id }), label), () => setTab(id), { key: id, variant: 'ghost', 'aria-current': tab === id ? 'page' : undefined }))),
+    (info?.updateAvailable || update.applied || update.error) ? h('div', { className: 'dh-update-wrap' },
+      update.error ? h('div', { className: 'dh-feedback dh-error', role: 'alert' }, update.error) : null,
+      update.applied ? h('div', { className: 'dh-import-result', role: 'status' }, h('span', null, update.applied.message)) : null,
+      info?.updateAvailable && !update.applied ? h('div', { className: 'dh-update-banner', role: 'status' },
+        h('div', { className: 'dh-update-copy' },
+          h('strong', null, `发现 DSH Host 新版本 v${info.latestVersion}`),
+          h('span', null, `当前版本 v${info.currentVersion}${info.installMode === 'link' ? '（本地开发链接模式，请执行 git pull 更新）' : ''}`)),
+        h('div', { className: 'dh-update-actions' },
+          info.releaseUrl ? h('a', { className: 'dh-link-btn', href: info.releaseUrl, target: '_blank', rel: 'noreferrer' }, '查看更新说明') : null,
+          info.canAutoUpdate ? dhButton(update.applying ? '正在更新…' : '一键更新', applyUpdate, { className: 'dh-primary', disabled: update.applying }) : null)) : null) : null,
     h('div', { className: 'dh-body', key: tab },
       tab === 'overview' ? h(DhOverview, { remote: consoleRemote, navigate: setTab })
         : tab === 'connections' ? h(DhConnections, { remote: consoleRemote })
@@ -526,6 +564,16 @@ export const dshConsoleCss = `
 .dh-chip-active{border-color:var(--dh-accent)!important;background:var(--dh-accent-soft)!important;color:var(--dh-accent)!important;font-weight:600}
 .dh-price-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:10px 0}
 .dh-price-fields label{display:flex;flex-direction:column;gap:6px;font-size:12.5px;font-weight:550;color:var(--dsw-alias-label-secondary)}
+.dh-header-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.dh-chip-update{border-color:color-mix(in srgb,var(--dh-warn) 45%,transparent)!important;background:var(--dh-warn-soft)!important;color:var(--dh-warn)!important}
+.dh-update-wrap{padding:14px 32px 0;max-width:1180px;margin:0 auto;width:100%}
+.dh-update-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:13px 18px;border:1px solid color-mix(in srgb,var(--dh-accent) 40%,transparent);border-radius:12px;background:color-mix(in srgb,var(--dh-accent-soft) 70%,var(--dsw-alias-bg-base))}
+.dh-update-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dh-update-copy strong{font-size:13.5px;color:var(--dsw-alias-label-primary)}
+.dh-update-copy span{font-size:12.5px;color:var(--dsw-alias-label-secondary)}
+.dh-update-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dh-link-btn{font-size:12.5px;color:var(--dh-accent);text-decoration:none;font-weight:550}
+.dh-link-btn:hover{text-decoration:underline}
 @container(max-width:960px){.dh-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dh-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container(max-width:720px){.dh-body{padding:20px 18px 32px}.dh-grid,.dh-guide{grid-template-columns:1fr}.dh-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.dh-metrics .dh-card{padding:14px}.dh-value{font-size:22px}.dh-price-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.dh-chip{display:none}.dh-import-result{align-items:flex-start;flex-direction:column}.dh-header{padding:18px 18px 14px max(18px,var(--dsh-frame-leading-clearance,0px))}.dh-tabs{padding:0 14px}.dh-tabs button{font-size:13px;padding:10px 8px}.dh-session{align-items:flex-start}.dh-search{max-width:none}}
 @container(max-width:460px){.dh-metrics{grid-template-columns:1fr}.dh-stat-grid{grid-template-columns:1fr}.dh-body{padding:16px 12px 26px}.dh-card{padding:15px}.dh-updated{display:none}.dh-pairs>div{flex-wrap:wrap;gap:4px}.dh-pairs dd{text-align:left;width:100%}.dh-segment{display:flex;width:100%}.dh-segment button{flex:1}}

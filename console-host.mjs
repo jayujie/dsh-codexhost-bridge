@@ -1,6 +1,7 @@
 import { resolveHostInstallation } from './host-installation.mjs'
 import { NativeSessionImporter } from './native-session-import.mjs'
 import { parseConsoleRequest, CONSOLE_REMOTE_PACKAGE, consoleRemoteDescriptors } from './console-contract.mjs'
+import { PluginUpdater, readPluginVersion } from './plugin-updater.mjs'
 
 export function assertConsoleOwner(invocation) {
   if (invocation?.peer?.principal?.kind !== 'owner') throw new Error('Only the DSH owner can open or operate the DSH Host console')
@@ -11,10 +12,14 @@ export class DshHostConsole {
   constructor(ctx, config, driver, helpers) {
     this.ctx = ctx; this.config = config; this.driver = driver
     this.importer = new NativeSessionImporter(ctx, driver, helpers)
+    this.updater = new PluginUpdater(ctx, config)
   }
-  async bootstrap() { return { name: 'DSH Host', version: '0.3.4', agents: ['codex', 'claude-code', 'antigravity'], carrier: 'DSH' } }
+  async bootstrap() { return { name: 'DSH Host', version: await readPluginVersion(), agents: ['codex', 'claude-code', 'antigravity'], carrier: 'DSH' } }
   async request(raw) {
-    const input = parseConsoleRequest(raw), peer = await this.driver.consoleConnection()
+    const input = parseConsoleRequest(raw)
+    if (input.action === 'updateCheck') return this.updater.check({ refresh: input.refresh === true })
+    if (input.action === 'updateApply') return this.updater.apply({ version: input.version })
+    const peer = await this.driver.consoleConnection()
     const call = (method, params = {}) => peer.request(method, params, { timeoutMs: 45000 })
     switch (input.action) {
       case 'overview': return { connected: true, workspaces: this.ctx.workspaceRegistry.list().length,

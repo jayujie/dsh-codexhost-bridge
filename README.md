@@ -56,6 +56,20 @@ dsh plugin --profile desktop add https://github.com/jayujie/dsh-host
   - Claude Code CLI (`claude`)
   - Antigravity CLI (`agy`)
 
+## Updating & Release Push
+
+### For Users
+- **Built-in Update Notification & 1-Click Upgrade**: Opening the **DSH Host Console** automatically checks `market-index.json` (with fallback to GitHub Releases). When a new version is available, a banner appears at the top of the console with a release notes link and a **1-click Update** button (invoking DSH's own `pluginManager` with automatic rollback on failure).
+- **DSH Plugin Market**: If you added `market-index.json` under **Plugins → Discover**, DSH automatically marks newer versions as **Update available**.
+- **DSH Plugin Manager (npm installs)**: If installed from npm (`dsh-host`), DSH Plugin Manager natively lists newer versions and supports in-place updates.
+
+### For Maintainers (Pushing New Versions)
+Run one command from a clean working tree:
+```powershell
+npm run release -- patch    # or minor / major / 0.6.2
+```
+This bumps `package.json`, rebuilds `client.js`, runs unit tests, creates the `vX.Y.Z` tag, updates `market-index.json` (preserving version history), and pushes to GitHub. Pushing a `v*` tag also triggers `.github/workflows/release.yml`, which automatically builds the `.tgz` asset, publishes a GitHub Release, publishes to npm (if `NPM_TOKEN` is set), and keeps `market-index.json` synced.
+
 ## Local Development & Testing
 
 ```powershell

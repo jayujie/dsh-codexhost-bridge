@@ -9,7 +9,7 @@ const h = (type, props, ...children) => ({ type, props: props ?? {}, children: c
 function harness(name, props) {
   const values = [], dependencies = [], effects = []
   let cursor = 0, tree
-  const api = vm.runInNewContext(`${source}\n;({DhImports,DhAccounts,DhPrices,DhOverview,dshConsoleCss})`, {
+  const api = vm.runInNewContext(`${source}\n;({ConsolePanel,DhImports,DhAccounts,DhPrices,DhOverview,dshConsoleCss})`, {
     h, DshConsoleButton: 'button', AGENT_ICONS: {}, consoleRemoteContribution: {},
     useState(initial) { const i = cursor++; if (!(i in values)) values[i] = initial; return [values[i], value => { values[i] = typeof value === 'function' ? value(values[i]) : value }] },
     useRef(initial) { const i = cursor++; return values[i] ??= { current: initial } },
@@ -80,4 +80,24 @@ test('refresh failure explicitly marks retained data as stale', async () => {
   ui.button('刷新').props.onClick(); ui.render(); await ui.settle()
   assert.match(ui.text(ui.tree), /刷新失败，以下保留上次读取的结果/)
   assert.match(ui.text(ui.tree), /offline/)
+})
+
+test('ConsolePanel displays live version, update banner, and triggers one-click update', async () => {
+  const requests = []
+  const remote = {
+    bootstrap: async () => ({ name: 'DSH Host', version: '0.6.1' }),
+    request: async input => {
+      requests.push(input)
+      if (input.action === 'updateCheck') return { currentVersion: '0.6.1', latestVersion: '0.6.2', updateAvailable: true, canAutoUpdate: true, releaseUrl: 'https://github.com/jayujie/dsh-host/releases/tag/v0.6.2' }
+      if (input.action === 'updateApply') return { status: 'restart-required', fromVersion: '0.6.1', toVersion: '0.6.2', message: '已安装 v0.6.2，请完整重启 DSH 使其生效。' }
+      return { workspaces: 1, externalSessions: 0 }
+    },
+  }
+  const ui = harness('ConsolePanel', { consoleRemote: remote, openSession() {} })
+  await ui.settle()
+  assert.match(ui.text(ui.tree), /发现 DSH Host 新版本 v0\.6\.2/)
+  ui.button('一键更新').props.onClick()
+  await ui.settle()
+  assert.ok(requests.some(r => r.action === 'updateApply' && r.version === '0.6.2'))
+  assert.match(ui.text(ui.tree), /已安装 v0\.6\.2/)
 })

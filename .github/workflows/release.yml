@@ -1,0 +1,90 @@
+name: Release & Push Updates
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish (e.g. v0.6.1)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dev dependencies & verify package
+        run: |
+          npm install
+          npm run build:client
+          npm run test:unit
+
+      - name: Pack release tarball
+        id: pack
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $ver = $pkg.version
+          $tag = if ("${{ inputs.tag }}") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $sha = (git rev-parse HEAD).Trim()
+          $tgz = (npm pack --silent | Select-Object -Last 1).Trim()
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tgz=$tgz" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish to npm (when NPM_TOKEN secret is configured)
+        id: npm
+        if: env.NODE_AUTH_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: pwsh
+        run: |
+          npm publish --access public
+          "published=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.pack.outputs.tag }}"
+          $tgz = "${{ steps.pack.outputs.tgz }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $tgz --clobber
+          } else {
+            gh release create $tag $tgz --title "DSH Host $tag" --generate-notes
+          }
+
+      - name: Push updated market-index.json to main
+        shell: pwsh
+        run: |
+          $sha = "${{ steps.pack.outputs.sha }}"
+          $sourceFlag = if ("${{ steps.npm.outputs.published }}" -eq "true") { "--source=npm" } else { "--source=git" }
+          git fetch origin main
+          git checkout -B main origin/main
+          node scripts/update-market-index.mjs $sha $sourceFlag
+          $diff = git status --porcelain market-index.json
+          if ($diff) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add market-index.json
+            git commit -m "chore: update market-index.json for ${{ steps.pack.outputs.tag }} [skip ci]"
+            git push origin main
+          }

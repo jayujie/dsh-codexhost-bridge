@@ -1,6 +1,6 @@
 {
   "name": "dsh-host",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "DSH Host plugin for DeepSeek Harness — run Codex, Claude Code, and Antigravity natively inside DSH with a plugin-owned local backend.",
   "private": false,
   "type": "module",
@@ -32,6 +32,7 @@
     "build:backend": "node scripts/setup-backend.mjs",
     "build": "npm run build:client && npm run build:backend",
     "market:index": "node scripts/update-market-index.mjs",
+    "release": "node scripts/release.mjs",
     "test": "node --test test/*.test.mjs",
     "test:unit": "node scripts/run-unit-tests.mjs"
   },
@@ -139,6 +140,7 @@
     "permission-presentation.mjs",
     "thinking-options.mjs",
     "preset-view.mjs",
+    "plugin-updater.mjs",
     "protocol.mjs",
     "rejected-start.mjs",
     "remote-contract.mjs",

@@ -5,12 +5,14 @@ const actions = {
   import: ['harnessId', 'kind', 'id', 'acknowledgeIdle'],
   usage: ['range', 'harness'], prices: [], priceDefault: ['model'],
   priceSave: ['key', 'previousKey', 'price'], claudePath: ['path'],
+  updateCheck: ['refresh'], updateApply: ['version'],
 }
 const text = (v, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\u0000\r\n]/.test(v)
 export function parseConsoleRequest(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v) || !Object.hasOwn(actions, v.action)
     || Object.keys(v).some(k => k !== 'action' && !actions[v.action].includes(k))) throw new TypeError('Unsupported DSH Host console action')
   for (const k of ['refresh', 'acknowledgeIdle']) if (v[k] !== undefined && typeof v[k] !== 'boolean') throw new TypeError(`Invalid ${k}`)
+  if (v.version !== undefined && !text(v.version, 64)) throw new TypeError('Invalid version')
   if (v.harnessId !== undefined && !['codex', 'claude-code', 'antigravity'].includes(v.harnessId)) throw new TypeError('Unsupported import Agent')
   if (['sessions', 'import'].includes(v.action) && !v.harnessId) throw new TypeError('Import Agent is required')
   for (const k of ['id', 'cursor', 'model', 'key', 'previousKey']) if (v[k] !== undefined && !text(v[k], k === 'cursor' ? 16384 : 1024)) throw new TypeError(`Invalid ${k}`)

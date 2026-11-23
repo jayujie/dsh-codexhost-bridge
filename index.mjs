@@ -31,6 +31,8 @@ try {
       claudeTitleTimeoutMs: z.number().step(1).min(1000).max(60_000).default(30_000).description('Timeout for native Claude title generation (ms).'),
       claudeTitleMaxCostUsd: z.number().min(0.001).max(1).default(0.05).description('Cost cap per native Claude title generation (USD).'),
       nativeInteractionApprovals: z.boolean().default(true).description('Bridge native tool approval and user question prompts into DSH.'),
+      checkUpdates: z.boolean().default(true).description('Automatically check for newer dsh-host releases when opening the DSH Host console.'),
+      updateIndexUrl: z.string().description('Optional custom plugin market index URL used to check for dsh-host updates.'),
       hostNodePath: z.string().description('Optional absolute path to node.exe used for the background Host.'),
       stockCodexPath: z.string().description('Optional absolute path to codex.exe.'),
       hostRuntimePath: z.string().description('Optional absolute path to a custom patched host-runtime.mjs.'),

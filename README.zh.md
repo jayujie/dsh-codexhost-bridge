@@ -56,6 +56,20 @@ dsh plugin --profile desktop add https://github.com/jayujie/dsh-host
   - Claude Code CLI（`claude`）
   - Antigravity CLI（`agy`）
 
+## 更新推送与版本发布
+
+### 用户端如何接收并安装更新
+- **控制台内自动检测与一键更新**：打开 **DSH Host 控制台** 会自动检查 `market-index.json`（不可达时自动回退到 GitHub Releases API）；检测到新版本后顶部会弹出更新横幅，展示版本号、更新说明链接与 **「一键更新」** 按钮（底层调用 DSH 原生 `pluginManager`，安装失败时自动回滚到旧版本）。
+- **插件市场发现页**：如果你在 **插件 → 发现** 添加了本仓库的 `market-index.json`，DSH 也会自动对比版本并提示可更新。
+- **插件管理器原生更新（npm 渠道）**：若通过 npm 包名 `dsh-host` 安装，DSH 插件管理器原生支持版本列表与就地升级。
+
+### 维护者如何推送新版本
+在工作区干净时执行一条命令即可完成发版与推送：
+```powershell
+npm run release -- patch    # 或 minor / major / 0.6.2
+```
+脚本会自动递增 `package.json` 版本、重新构建 `client.js`、运行单元测试、打 `vX.Y.Z` 标签、追加更新 `market-index.json`（保留历史版本记录）并推送到 GitHub。推送 `v*` 标签还会自动触发 `.github/workflows/release.yml`，自动打包 `.tgz`、创建 GitHub Release，并在配置了 `NPM_TOKEN` 时自动发布至 npm。
+
 ## 本地开发与测试
 
 ```powershell
