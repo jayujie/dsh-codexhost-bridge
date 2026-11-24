@@ -6,7 +6,7 @@ import { compactToolItemMeta } from './native-tool-projector.mjs'
 import { encodeNativeHarnessRoute } from './harness-route.mjs'
 import { CODEX_PERMISSION_MODES, codexPermissionMode, codexPermissionParameters } from './codex-permissions.mjs'
 import { thinkingEfforts, selectedThinkingEffort } from './thinking-options.mjs'
-import { OBSERVATION, ZERO_USAGE, observedUsage, observedCost, mergeObservedUsage, turnTimingUsage, turnUsage, acceptNativeTitle } from './native-observations.mjs'
+import { OBSERVATION, ZERO_USAGE, hasBillingCounters, observedUsage, observedCost, mergeObservedUsage, turnTimingUsage, turnUsage, acceptNativeTitle } from './native-observations.mjs'
 import { completeExternalTitle, readNativeAntigravityTitle } from './native-title.mjs'
 import { completeNativeClaudeTitle } from './native-claude-title.mjs'
 import { DELEGATION_AGENTS, selectedDelegationTargets } from './delegation-mentions.mjs'
@@ -457,6 +457,20 @@ export class NativeSessionDriver {
     return acceptNativeTitle(agent.session, value, this.#ctx.get?.('sessionTitle')?.get(agent.session))
   }
 
+  #lastBillingUsage(session, threadId) {
+    const projected = this.#observationOf(session)
+    if (projected?.threadId === threadId && hasBillingCounters(projected.usage)) return projected.usage
+    const events = session.snapshotEvents?.() ?? []
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]
+      if (event.ignorable === true && [OBSERVATION, 'plugin:codexhost/observation'].includes(event.type)
+        && event.data?.threadId === threadId && hasBillingCounters(event.data?.usage)) {
+        return event.data.usage
+      }
+    }
+    return undefined
+  }
+
   async #observe(peer, agent, state, model, readTitle = true, timing, terminalUsage) {
     // Metadata failures cannot fail or resubmit a completed task.
     let usage, cost
@@ -634,10 +648,15 @@ export class NativeSessionDriver {
       if (nativeCommand.text && commandDescriptor.argumentMode !== 'text') throw new HostConnectionError('HOST_COMMAND_INPUT', '此原生命令不接受参数，未发送任务')
     }
     if (lease && harnessId === 'codex' && state.collaborationVersion !== 1 && (targets.length || lease.schemas.some(tool => tool.name.startsWith('team_task_')))) throw new HostConnectionError('HOST_COLLABORATION_UPGRADE', 'This Codex Thread predates unified collaboration tools. Start a new conversation for subagents/Teams; its history will not be replayed or replaced.')
+    const fallbackUsageBefore = !newThread ? this.#lastBillingUsage(agent.session, state.threadId) : undefined
     const observedBefore = await this.#observe(peer, agent, state, catalog.selection.modelId)
     // A newly created Thread has no submitted requests, even when its initial
     // native snapshot contains context/price metadata but omits token counters.
-    const usageBefore = newThread ? ZERO_USAGE : observedBefore
+    // On resumed turns, fall back to the last persisted same-thread billing counters if
+    // the pre-turn inspect timed out or returned metadata without billing buckets.
+    const usageBefore = newThread ? ZERO_USAGE
+      : hasBillingCounters(observedBefore) ? observedBefore
+      : fallbackUsageBefore ?? observedBefore
     signal.throwIfAborted()
     // Recheck after asynchronous preparation, before committing any new step.
     this.#assertStepAvailable({ agent, turn, step })
@@ -659,7 +678,11 @@ export class NativeSessionDriver {
     let startDispatched = false
     let remoteCompleted = false
     let remoteStatus
-    let liveUsage
+    let exactLiveUsage
+    let threadLiveUsage
+    let liveContextUsed
+    let liveContextWindow
+    const resolveLiveUsage = () => exactLiveUsage ?? threadLiveUsage
     let requestStartedAt, requestCompletedAt
     let interrupt
     let cancelledTimer
@@ -735,6 +758,7 @@ export class NativeSessionDriver {
       const eventTurnId = params.turnId ?? params.turn?.id
       if (params.threadId !== state.threadId || (hostTurnId !== undefined && eventTurnId !== undefined && eventTurnId !== hostTurnId)) return
       if (hostTurnId === undefined) { buffered.push(message); return }
+      if (remoteCompleted) return
       try {
         if (message.id !== undefined) {
           if (message.method === 'item/tool/call' && lease) {
@@ -749,7 +773,19 @@ export class NativeSessionDriver {
         if (message.method === 'serverRequest/resolved') { interactions.resolve(params.requestId); return }
         projector.accept(message)
         this.#handOffBackground(message, { peer, agent, harnessId, threadId: state.threadId, projector })
-        if (message.method === 'thread/tokenUsage/updated' || message.method === 'codexhost/thread/tokenUsage/updated') liveUsage = observedUsage(params.tokenUsage?.total)
+        if (message.method === 'codexhost/thread/tokenUsage/updated') {
+          const next = observedUsage(params.tokenUsage?.total)
+          if (next) exactLiveUsage = next
+        } else if (message.method === 'thread/tokenUsage/updated') {
+          const next = observedUsage(params.tokenUsage?.total)
+          // External context updates emit zero-total placeholders via projectCodexThreadUsage;
+          // never let them overwrite real cumulative counters or trigger a zero-delta failure.
+          if (next && next.totalTokens > 0) threadLiveUsage = next
+          const lastUsed = params.tokenUsage?.last?.totalTokens
+          const ctxWindow = params.tokenUsage?.modelContextWindow
+          if (Number.isSafeInteger(lastUsed) && lastUsed > 0) liveContextUsed = lastUsed
+          if (Number.isSafeInteger(ctxWindow) && ctxWindow > 0) liveContextWindow = ctxWindow
+        }
         if (message.method === 'thread/name/updated') this.#syncNativeTitle(agent, params.threadName)
         if (message.method === 'codexhost/thread/manual-compaction/started') {
           if (!manualCompactionId) {
@@ -775,8 +811,9 @@ export class NativeSessionDriver {
           const failed = params.outcome?.status === 'failed' || params.outcome?.status === 'cancelled' || params.item.status === 'failed'
           const summary = typeof params.item.summary === 'string' ? params.item.summary : typeof params.item.text === 'string' ? params.item.text : undefined
           const errorText = params.outcome?.error?.message ?? params.item.error?.message
-          const afterTokens = Number.isFinite(liveUsage?.contextUsedTokens) && liveUsage.contextUsedTokens > 0 ? liveUsage.contextUsedTokens : undefined
-          const afterWindow = Number.isFinite(liveUsage?.contextWindowTokens) && liveUsage.contextWindowTokens > 0 ? liveUsage.contextWindowTokens : compactionBeforeWindow
+          const currentUsage = resolveLiveUsage()
+          const afterTokens = liveContextUsed ?? (Number.isFinite(currentUsage?.contextUsedTokens) && currentUsage.contextUsedTokens > 0 ? currentUsage.contextUsedTokens : undefined)
+          const afterWindow = liveContextWindow ?? (Number.isFinite(currentUsage?.contextWindowTokens) && currentUsage.contextWindowTokens > 0 ? currentUsage.contextWindowTokens : compactionBeforeWindow)
           recordCompaction(targetId, {
             mode: manualCompactionId === targetId || nativeCommand?.name === 'compact' ? 'manual' : 'auto',
             phase: failed ? 'failed' : 'completed',
@@ -792,11 +829,12 @@ export class NativeSessionDriver {
         }
         if (message.method === 'turn/completed') {
           if (remoteCompleted) return
+          const currentUsage = resolveLiveUsage()
           for (const item of compactions.values()) {
             if (item.phase !== 'started') continue
             const failed = params.turn?.status !== 'completed'
-            const afterTokens = Number.isFinite(liveUsage?.contextUsedTokens) && liveUsage.contextUsedTokens > 0 ? liveUsage.contextUsedTokens : undefined
-            const afterWindow = Number.isFinite(liveUsage?.contextWindowTokens) && liveUsage.contextWindowTokens > 0 ? liveUsage.contextWindowTokens : compactionBeforeWindow
+            const afterTokens = liveContextUsed ?? (Number.isFinite(currentUsage?.contextUsedTokens) && currentUsage.contextUsedTokens > 0 ? currentUsage.contextUsedTokens : undefined)
+            const afterWindow = liveContextWindow ?? (Number.isFinite(currentUsage?.contextWindowTokens) && currentUsage.contextWindowTokens > 0 ? currentUsage.contextWindowTokens : compactionBeforeWindow)
             recordCompaction(item.id, {
               phase: failed ? 'failed' : 'completed',
               ...(afterTokens === undefined ? {} : { afterTokens }),
@@ -885,6 +923,7 @@ export class NativeSessionDriver {
       unsubscribe()
       await interactions.close()
       await lease?.close()
+      const liveUsage = resolveLiveUsage()
       projector.usage(turnUsage(usageBefore, liveUsage))
       projector.settle({ interrupted: signal.aborted || remoteStatus === 'interrupted' })
       agent.session.append('step/end', { turn, step })

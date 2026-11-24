@@ -1,7 +1,7 @@
 import { zodRequire } from './zod-resolver.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ZERO_USAGE, observedUsage, turnUsage, acceptNativeTitle, foldHostModelIdentity, installObservationProjection } from '../native-observations.mjs'
+import { ZERO_USAGE, hasBillingCounters, observedUsage, mergeObservedUsage, turnUsage, acceptNativeTitle, foldHostModelIdentity, installObservationProjection } from '../native-observations.mjs'
 import { nativeFilePath, installWorkspaceFilePaths } from '../workspace-file-paths.mjs'
 import { createRequire } from 'node:module'
 
@@ -43,11 +43,22 @@ test('Host usage becomes disjoint DSH billing without counting cached input twic
   const after = { inputTokens: 1000, cachedInputTokens: 600, cacheWriteInputTokens: 100, outputTokens: 50, reasoningOutputTokens: 10, totalTokens: 1050 }
   assert.deepEqual(turnUsage(ZERO_USAGE, after), { inputTokens: 300, cacheReadTokens: 600, cacheWriteTokens: 100, outputTokens: 50, reasoningTokens: 10, totalTokens: 1050 })
   assert.deepEqual(turnUsage(after, { ...after, inputTokens: 1400, cachedInputTokens: 900, outputTokens: 70, totalTokens: 1470 }), { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 0, outputTokens: 20, reasoningTokens: 0, totalTokens: 420 })
+  // Polluted reasoningOutputTokens on a prior partial/error observation omits reasoningTokens instead of dropping the whole Turn.
+  assert.deepEqual(turnUsage({ ...after, reasoningOutputTokens: 0 }, { ...after, inputTokens: 1400, cachedInputTokens: 900, outputTokens: 70, reasoningOutputTokens: 45, totalTokens: 1470 }), { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 0, outputTokens: 20, totalTokens: 420 })
+  // Zero-delta (failed/no-op) turns do not emit bogus 0 tok badges.
+  assert.equal(turnUsage(after, after), undefined)
   assert.equal(turnUsage(undefined, after), undefined)
   assert.equal(turnUsage(after, ZERO_USAGE), undefined)
   assert.equal(turnUsage(ZERO_USAGE, { ...after, totalTokens: 0 }), undefined)
   assert.equal(turnUsage(ZERO_USAGE, { ...after, cachedInputTokens: undefined }), undefined)
   assert.deepEqual(observedUsage({ inputTokens: -1, totalCostUsd: 2 }), { totalCostUsd: 2 })
+  assert.equal(hasBillingCounters(after), true)
+  assert.equal(hasBillingCounters({ inputTokens: 10, outputTokens: 5 }), false)
+  // Same-counter partial/error observations retain cache buckets and positive reasoning counters.
+  const merged = mergeObservedUsage(after, { inputTokens: 1000, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 1050 }, true)
+  assert.equal(merged.cachedInputTokens, 600)
+  assert.equal(merged.cacheWriteInputTokens, 100)
+  assert.equal(merged.reasoningOutputTokens, 10)
 })
 
 test('Native title events replace fallback names but never override user names', () => {

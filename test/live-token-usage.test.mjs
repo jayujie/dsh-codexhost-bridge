@@ -139,3 +139,93 @@ for (const harness of ['claude-code', 'codex']) for (const metadataMode of ['pen
     assert.equal(frames.filter(frame => frame.type === 'end').length, 2)
   } finally { releaseMetadata?.(); await driver.dispose() }
 })
+
+for (const harness of ['claude-code', 'antigravity']) test(`${harness} late zero-total thread/tokenUsage/updated and partial pre-turn inspect never erase turn usage or stall turn completion`, { timeout: 5000 }, async () => {
+  const events = [], frames = [], listeners = new Set()
+  let number = 0, preTurnInspectShouldFail = false, releaseBackgroundObserve
+  let currentTurnId = null
+  const session = { id: 'local', header: { cwd: 'D:/fixture' }, snapshotEvents: () => events, append(type, data) {
+    const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }
+    events.push(event); return event
+  } }
+  session.append('plugin:codexhost/configuration', { harnessId: harness, modelId: 'test' })
+  const helpers = {
+    appendPluginRecord: (s, type, data) => s.append(type, data), createAssistantMessage: x => x,
+    agentEvents: () => ({ emit: (_type, value) => frames.push(value.frame) }),
+    AssistantStreamAccumulator: class { rows = []; push(value) { this.rows.push(value); return value } snapshot() { return this.rows } },
+    BlockAssembler: class { push() {} blocks() { return [{ type: 'text', text: 'hello' }] } },
+  }
+  const aggregate = () => Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value * number]))
+  const zeroPlaceholder = turnId => ({
+    method: 'thread/tokenUsage/updated',
+    params: { threadId: 'thread', turnId, tokenUsage: { total: { ...ZERO_USAGE }, last: { totalTokens: 42000 }, modelContextWindow: 512000 } },
+  })
+  const ctx = {
+    get() {},
+    agentPresets: { presetForSession: () => 'codexhost-' + harness },
+    sessionPersistence: {
+      async flush() {
+        // Reproduce Claude Code's async #requestContextUsage("summary") arriving
+        // after turn/completed while #save() is flushing ready state to disk.
+        if (currentTurnId) {
+          for (const send of listeners) send(zeroPlaceholder(currentTurnId))
+        }
+      },
+    },
+  }
+  const peer = { closed: new Promise(() => {}), close() {}, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, async request(method) {
+    if (method === 'codexhost/harness/inspect') return { status: 'ready', catalog: { models: [{ ref: { id: 'test' }, label: 'test' }] } }
+    if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread' } }
+    if (method === 'thread/read') return { thread: { id: 'thread', status: { type: 'idle' } } }
+    if (method === 'codexhost/thread/usage/inspect') {
+      if (preTurnInspectShouldFail) {
+        preTurnInspectShouldFail = false
+        return { usage: { contextUsedTokens: 42000, contextWindowTokens: 512000 } }
+      }
+      if (number > 0 && currentTurnId !== null) {
+        return new Promise(resolve => { releaseBackgroundObserve = () => resolve({ usage: { ...aggregate(), contextUsedTokens: 42000, contextWindowTokens: 512000 } }) })
+      }
+      return { usage: { contextWindowTokens: 512000 } }
+    }
+    if (method === 'turn/start') {
+      const id = 'turn-' + ++number
+      currentTurnId = id
+      setImmediate(() => {
+        for (const send of listeners) {
+          send(zeroPlaceholder(id))
+          send({ method: 'item/completed', params: { threadId: 'thread', turnId: id, item: { id, type: 'agentMessage', text: 'hello' } } })
+          send(dshHostTokenUsageNotification('thread', id, aggregate()))
+          send(zeroPlaceholder(id))
+          send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id, status: 'completed' } } })
+        }
+      })
+      return { turn: { id } }
+    }
+    throw new Error(method)
+  } }
+  const driver = new NativeSessionDriver(ctx, helpers, { connect: async () => peer, turnTimeoutMs: 2000 })
+  const agent = { id: 'local', session }
+  try {
+    // Turn 1: zero-total thread/tokenUsage/updated arrives before, after exact notification, AND during post-completion flush.
+    await driver.run({ agent, messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'turn 1' }] }], turn: 1, step: 1, signal: new AbortController().signal })
+    assert.equal(typeof releaseBackgroundObserve, 'function', 'Turn 1 must settle without waiting for background usage inspection')
+    const msg1 = events.filter(event => event.type === 'assistant/message').at(-1)
+    assert.equal(msg1.data.usage?.totalTokens, 32958)
+    assert.equal(msg1.data.usage?.cacheWriteTokens, 26767)
+    releaseBackgroundObserve(); releaseBackgroundObserve = undefined
+    currentTurnId = null
+    await new Promise(resolve => setImmediate(resolve))
+    const obs1 = events.filter(event => event.type === 'plugin:codexhost/observation-v2').at(-1)?.data
+    assert.ok(obs1.usage.turnAverageTokensPerSecond > 0)
+
+    // Turn 2: pre-turn inspect returns context-only without billing counters; fallback to obs1 must keep per-turn usage intact.
+    preTurnInspectShouldFail = true
+    await driver.run({ agent, messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'turn 2' }] }], turn: 2, step: 1, signal: new AbortController().signal })
+    assert.equal(typeof releaseBackgroundObserve, 'function', 'Turn 2 must settle without waiting for background usage inspection')
+    const msg2 = events.filter(event => event.type === 'assistant/message').at(-1)
+    assert.equal(msg2.data.usage?.totalTokens, 32958)
+    assert.equal(msg2.data.usage?.inputTokens, 6134)
+    releaseBackgroundObserve(); releaseBackgroundObserve = undefined
+    await new Promise(resolve => setImmediate(resolve))
+  } finally { releaseBackgroundObserve?.(); await driver.dispose() }
+})

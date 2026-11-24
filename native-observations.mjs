@@ -4,6 +4,11 @@ export const OBSERVATION = 'plugin:codexhost/observation-v2'
 
 const count = value => Number.isSafeInteger(value) && value >= 0
 const COUNTERS = ['inputTokens', 'cachedInputTokens', 'cacheWriteInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens']
+const BILLING_COUNTERS = ['inputTokens', 'cachedInputTokens', 'cacheWriteInputTokens', 'outputTokens']
+
+export function hasBillingCounters(value) {
+  return Boolean(value && typeof value === 'object' && BILLING_COUNTERS.every(key => count(value[key])))
+}
 
 /** Copy only measured counters and capacities; absent facts remain absent. */
 export function observedUsage(value) {
@@ -28,7 +33,12 @@ export function mergeObservedUsage(previous, next, sameRoute) {
   }
   const sameCounters = ['inputTokens', 'outputTokens', 'totalTokens'].every(key => previous[key] !== undefined && previous[key] === next[key])
   if (sameCounters) {
-    for (const key of ['turnAverageTokensPerSecond', 'outputTimingReliable']) if (merged[key] === undefined && previous[key] !== undefined) merged[key] = previous[key]
+    for (const key of ['cachedInputTokens', 'cacheWriteInputTokens', 'turnAverageTokensPerSecond', 'outputTimingReliable']) {
+      if (merged[key] === undefined && previous[key] !== undefined) merged[key] = previous[key]
+    }
+    if (previous.reasoningOutputTokens > 0 && (merged.reasoningOutputTokens === undefined || merged.reasoningOutputTokens === 0)) {
+      merged.reasoningOutputTokens = previous.reasoningOutputTokens
+    }
     if (merged.outputTimingReliable === 0) delete merged.outputTokensPerSecond
   }
   return merged
@@ -53,11 +63,14 @@ export function turnUsage(before, after) {
   // Host input includes cache reads/writes; DSH input excludes both.
   if (!count(delta.cachedInputTokens) || !count(delta.cacheWriteInputTokens)) return undefined
   const inputTokens = delta.inputTokens - delta.cachedInputTokens - delta.cacheWriteInputTokens
-  if (!count(inputTokens) || (delta.reasoningOutputTokens !== undefined && delta.reasoningOutputTokens > delta.outputTokens)) return undefined
+  if (!count(inputTokens)) return undefined
   const totalTokens = delta.inputTokens + delta.outputTokens
-  if (!count(totalTokens) || (delta.totalTokens !== undefined && delta.totalTokens !== totalTokens)) return undefined
+  if (!count(totalTokens) || totalTokens === 0 || (delta.totalTokens !== undefined && delta.totalTokens !== totalTokens)) return undefined
+  // Reasoning is an optional sub-breakdown of outputTokens; if a prior partial/error
+  // observation reset reasoningOutputTokens, omit it instead of dropping the whole Turn's usage.
+  const reasoningTokens = delta.reasoningOutputTokens !== undefined && delta.reasoningOutputTokens <= delta.outputTokens ? delta.reasoningOutputTokens : undefined
   return { inputTokens, outputTokens: delta.outputTokens, totalTokens, cacheReadTokens: delta.cachedInputTokens,
-    cacheWriteTokens: delta.cacheWriteInputTokens, ...(delta.reasoningOutputTokens === undefined ? {} : { reasoningTokens: delta.reasoningOutputTokens }) }
+    cacheWriteTokens: delta.cacheWriteInputTokens, ...(reasoningTokens === undefined ? {} : { reasoningTokens }) }
 }
 
 /** Synchronize a real native title, preserving user-pinned names and recording its origin. */
