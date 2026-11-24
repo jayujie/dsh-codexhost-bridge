@@ -88,7 +88,7 @@ test('old overflow wrapper and drag shrink/lag animations are gone', () => {
 test('vendored Radix runtime matches its reviewed output manifest and stays lazy/shared-React', async () => {
   const text = await readFile(new URL('../slider-runtime.mjs', import.meta.url), 'utf8')
   const manifest = JSON.parse(await readFile(new URL('../slider-build-manifest.json', import.meta.url), 'utf8'))
-  assert.equal(createHash('sha256').update(text).digest('hex'), manifest.outputSha256)
+  assert.equal(createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex'), manifest.outputSha256)
   assert.equal(manifest.package, '@radix-ui/react-slider'); assert.equal(manifest.version, '1.3.6')
   assert.match(text, /export function getSliderPrimitive/); assert.match(text, /if \(sliderPrimitive\) return sliderPrimitive/)
 })

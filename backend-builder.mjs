@@ -10,10 +10,20 @@ import { patchClaudeNetworkRetry } from './patch-claude-network-retry.mjs'
 import { patchClaudeCommands } from './patch-claude-commands.mjs'
 import { patchAntigravityPerf } from './patch-antigravity-perf.mjs'
 import { patchAntigravityCollaboration } from './patch-antigravity-collaboration.mjs'
+import { patchedHostTools } from './patch-host-tools.mjs'
+import { patchedHostUsage } from './patch-host-usage.mjs'
 import { hostDataDirectory } from './backend-paths.mjs'
 
 export const CODEXHOST_VERSION = '0.17.4'
-// Rebuild only from the reviewed 0.17.4 runtime, including its usage/tool fixes.
+// Official stock @codexhost/cli-win32-x64@0.17.4 SHA-256 pins (from npm).
+export const STOCK_RUNTIME_PIN = 'b1b6857594ca733f887968d42758972b914f7d2d8c1412bc7874199e4b1cb44a'
+export const STOCK_ADAPTER_PINS = Object.freeze({
+  'claude-code': 'bf24a2f5af9199a1b8ebddd8fb767966a73b53bd782d2260bb17962efd480f09',
+  'codex-usage': 'f8ceb801bb280fae8ca8a0825dae16c72e6b263ff302f8a937e17a4a5d98f1f7',
+  antigravity: '2880b71c1813de08f5a013f4ee018c13a367ffa15a8bcfedcaf1f7f7e2ed7720',
+  'deepseek-harness': 'a0bc939abc5c922f1bb1d83080446279b18622b2078a3df6c52ffeeeb92c4eda',
+})
+// Reviewed 0.17.4 runtime after applying patch-host-tools + patch-host-usage.
 export const RUNTIME_PIN = '020fb3892483ee2e2965b37179ca2708e534ae0ba7a1bb9dbf203517641c23dc'
 export const ADAPTER_PINS = Object.freeze({
   'claude-code': '9c063b8ab6eb59e4ab02c671fc05e2ef646b295a8b52bd1b7b93ca5391804d2a',
@@ -22,9 +32,21 @@ export const ADAPTER_PINS = Object.freeze({
   'deepseek-harness': 'dbe1c545ac4ba99fa62571f6948f4a74b85659d1a0d0807cade640be2606d532',
 })
 
+const CLAUDE_UA_HEADER = `\n// Local compatibility override: HTTP User-Agent only; preserve SDK session identity.\nimport { execFileSync as codexhostUaExecFileSync } from "node:child_process";\nconst codexhostUaVersions = new Map();\nfunction codexhostUaEnvironment(command, environment) {\n  let version = codexhostUaVersions.get(command);\n  if (!version) {\n    try {\n      const output = codexhostUaExecFileSync(command, ["--version"], { env: environment, encoding: "utf8", timeout: 5000, windowsHide: true });\n      version = output.match(/\\b(\\d+\\.\\d+\\.\\d+)\\b/)?.[1];\n    } catch { return environment; }\n    if (!version) return environment;\n    codexhostUaVersions.set(command, version);\n  }\n  const headers = (environment?.ANTHROPIC_CUSTOM_HEADERS ?? "").split(/\\r?\\n/).filter(line => line.trim() && !/^\\s*user-agent\\s*:/i.test(line));\n  headers.push(\`User-Agent: claude-cli/\${version} (external, sdk-cli)\`);\n  return { ...environment, ANTHROPIC_CUSTOM_HEADERS: headers.join("\\n") };\n}\n`
+
+function patchStockClaudeUserAgent(source) {
+  let out = CLAUDE_UA_HEADER + source
+  const needle = '    const child = spawn2(options.command, options.args, {\n      cwd: options.cwd,\n      env: options.env,'
+  if (out.split(needle).length !== 3) throw new Error('Stock claude-code adapter does not match expected spawn sites')
+  return out.replaceAll(needle, '    const child = spawn2(options.command, options.args, {\n      cwd: options.cwd,\n      env: codexhostUaEnvironment(options.command, options.env),')
+}
+
 const ROOT = path.dirname(fileURLToPath(import.meta.url))
 const PATCH_INPUT_FILES = [
   'backend-builder.mjs',
+  'patch-host-tools.mjs',
+  'patch-host-usage.mjs',
+  'host-usage-totals.mjs',
   'patch-claude-input.mjs',
   'patch-claude-network-retry.mjs',
   'patch-claude-commands.mjs',
@@ -117,7 +139,11 @@ export async function provisionedBackendDirectory(config = {}, environment = pro
 
 export async function buildPatchedBackend({ sourceDir, outDir, useEsbuild = true, atomic = false } = {}) {
   if (!sourceDir) throw new Error('Provide the reviewed CodexHost 0.17.4 app directory (e.g. via scripts/setup-backend.mjs)')
-  const raw = await readFile(path.join(sourceDir, 'host-runtime.mjs'), 'utf8')
+  let raw = (await readFile(path.join(sourceDir, 'host-runtime.mjs'), 'utf8')).replace(/\r\n/g, '\n')
+  const rawHash = digest(raw)
+  if (rawHash === STOCK_RUNTIME_PIN) {
+    raw = await patchedHostUsage(patchedHostTools(raw))
+  }
   if (digest(raw) !== RUNTIME_PIN) throw new Error('Unreviewed Host runtime: audit the source and patches before rebuilding')
 
   const esbuild = useEsbuild ? await loadEsbuild() : null
@@ -263,8 +289,14 @@ process.exitCode = arguments_[0] === "--codexhost-delegation-cli" ? await runDel
     await mkdir(targetDir, { recursive: true })
     const files = { 'host-runtime.mjs': await emit(runtime, 'host-runtime.mjs') }
     for (const id of ['claude-code', 'antigravity', 'codex-usage', 'deepseek-harness']) {
-      let plugin = await readFile(path.join(sourceDir, 'plugins', id, 'plugin.mjs'), 'utf8')
-      if (digest(plugin) !== ADAPTER_PINS[id]) throw new Error(`Unreviewed ${id} adapter; audit before rebuilding`)
+      let plugin = (await readFile(path.join(sourceDir, 'plugins', id, 'plugin.mjs'), 'utf8')).replace(/\r\n/g, '\n')
+      let pluginHash = digest(plugin)
+      if (id === 'claude-code' && pluginHash === STOCK_ADAPTER_PINS['claude-code']) {
+        plugin = patchStockClaudeUserAgent(plugin)
+        pluginHash = digest(plugin)
+      }
+      const allowedHashes = [ADAPTER_PINS[id], ...(id === 'deepseek-harness' ? [STOCK_ADAPTER_PINS[id]] : [])]
+      if (!allowedHashes.includes(pluginHash)) throw new Error(`Unreviewed ${id} adapter; audit before rebuilding`)
       const manifest = JSON.parse(await readFile(path.join(sourceDir, 'plugins', id, 'manifest.json'), 'utf8'))
       if (id === 'antigravity') {
         const backgroundSdk = (await readFile(path.join(ROOT, 'native-background-bridge.mjs'), 'utf8')).replace(/^export /gm, '')

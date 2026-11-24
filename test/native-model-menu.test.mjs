@@ -14,10 +14,10 @@ const catalog = {agentId:'codex', status:'ready', models:[{id:'m1',label:'Model 
 
 test('native model source and generated renderer match their reviewed build manifest', async () => {
   const manifest = JSON.parse(await readFile(new URL('../native-model-build-manifest.json', import.meta.url), 'utf8'))
-  const sha = bytes => createHash('sha256').update(bytes).digest('hex')
-  assert.equal(sha(await readFile(new URL('../native-model-runtime.mjs', import.meta.url))), manifest.outputSha256)
+  const sha = text => createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex')
+  assert.equal(sha(await readFile(new URL('../native-model-runtime.mjs', import.meta.url), 'utf8')), manifest.outputSha256)
   const monorepoSource = new URL('../../../client/ui-model-selection/src/client/ModelSelect.tsx', import.meta.url)
-  if (existsSync(monorepoSource)) assert.equal(sha(await readFile(monorepoSource)), manifest.sourceSha256)
+  if (existsSync(monorepoSource)) assert.equal(sha(await readFile(monorepoSource, 'utf8')), manifest.sourceSha256)
 })
 
 test('Host directory adapts exact model/effort IDs with stable snapshots and no guessed model defaults', () => {
