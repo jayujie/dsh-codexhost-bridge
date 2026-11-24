@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { EXTERNAL_PRESETS, EXTERNAL_ENGINE_IDS, engineLabel } from './external-engines.mjs'
 import { HostConnectionError, connectNativeHost } from './native-host-client.mjs'
 import { NativeTurnProjector } from './native-turn-projector.mjs'
+import { compactToolItemMeta } from './native-tool-projector.mjs'
 import { encodeNativeHarnessRoute } from './harness-route.mjs'
 import { CODEX_PERMISSION_MODES, codexPermissionMode, codexPermissionParameters } from './codex-permissions.mjs'
 import { thinkingEfforts, selectedThinkingEffort } from './thinking-options.mjs'
@@ -787,7 +788,7 @@ export class NativeSessionDriver {
           })
         }
         if (message.method === 'item/completed' && !['userMessage', 'agentMessage', 'reasoning', 'contextCompaction'].includes(params.item?.type)) {
-          this.#helpers.appendPluginRecord(agent.session, 'plugin:codexhost/item', { threadId: state.threadId, turnId: hostTurnId, item: params.item })
+          this.#helpers.appendPluginRecord(agent.session, 'plugin:codexhost/item', { threadId: state.threadId, turnId: hostTurnId, item: compactToolItemMeta(params.item) })
         }
         if (message.method === 'turn/completed') {
           if (remoteCompleted) return

@@ -4,6 +4,22 @@ export function nativeModelSource(provider, model) {
   return { kind: 'model', provider, model }
 }
 
+/** Keep lightweight identity/status metadata without duplicating multi-KB outputs or diffs already stored in tool/result text. */
+export function compactToolItemMeta(item) {
+  if (!item || typeof item !== 'object') return item
+  const compact = {}
+  for (const key of ['id', 'itemId', 'type', 'toolName', 'tool', 'namespace', 'command', 'cwd', 'status', 'exitCode', 'durationMs', 'success', 'processId', 'dshBackground']) {
+    if (item[key] !== undefined) compact[key] = item[key]
+  }
+  if (Array.isArray(item.changes)) {
+    compact.changes = item.changes.map(change => (change && typeof change === 'object' ? { path: change.path, ...(change.kind ? { kind: change.kind } : {}) } : change))
+  }
+  if (item.error && typeof item.error === 'object' && typeof item.error.message === 'string') {
+    compact.error = { message: item.error.message }
+  }
+  return compact
+}
+
 /** Display observations only: these records never execute DSH tools. */
 export class NativeToolProjector {
   #session; #helpers; #position; #calls = new Map(); #harness; #raw = false; #source
@@ -57,7 +73,7 @@ export class NativeToolProjector {
     call.ended = true
     this.#session.append('tool/result', { ...this.#position,
       message: this.#helpers.createToolResultMessage({ callId: call.id, content: [{ type: 'text', text }], isError }),
-      meta: { codexHost: { harness: this.#harness, item } },
+      meta: { codexHost: { harness: this.#harness, item: compactToolItemMeta(item) } },
     }, { surfaceOp: 'append' })
   }
 
