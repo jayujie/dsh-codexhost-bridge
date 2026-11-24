@@ -217,3 +217,58 @@ test('a small complete MCP result preserves its content and execution failure st
     assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 512)
   } finally { await lease.close() }
 })
+
+test('wait_agent drains next-step inbox messages, records user/message, notifies wait state, and returns messages to prevent spin', async () => {
+  const pending = [
+    { id: 'msg-1', source: { kind: 'subagent-settled', form: 'notice', summary: 'Background subagent worker finished.', senderSessionId: 'child-1' }, content: [{ type: 'text', text: 'Background subagent worker finished.\nResult: 42' }] },
+  ]
+  const claimedCalls = []
+  const waitStates = []
+  const f = fixture({
+    names: ['wait_agent', 'list_agents'],
+    outcome: () => ({ isError: false, value: { timedOut: false }, content: [{ type: 'text', text: '{"timedOut":false}' }] }),
+  })
+  f.agent.inbox = {
+    get nextStep() { return pending },
+    claim(target, turn) {
+      claimedCalls.push({ target, turn })
+      return pending.splice(0, pending.length)
+    },
+  }
+  const lease = await f.manager.open({ agent: f.agent, turn: 3, step: 2, signal: f.controller.signal, onWaitingChange: waiting => waitStates.push(waiting) })
+  try {
+    const result = await lease.call({ id: 'wait-1', name: 'wait_agent', arguments: { timeout_ms: 10000 } })
+    assert.notEqual(result.isError, true)
+    assert.deepEqual(waitStates, [true, false])
+    assert.deepEqual(claimedCalls, [{ target: 'next-step', turn: 3 }])
+    assert.equal(pending.length, 0)
+    const parsed = JSON.parse(result.content[0].text)
+    assert.equal(parsed.timedOut, false)
+    assert.equal(parsed.messages.length, 1)
+    assert.equal(parsed.messages[0].id, 'msg-1')
+    assert.match(parsed.messages[0].text, /Result: 42/)
+    const recorded = f.events.filter(event => event.type === 'user/message')
+    assert.equal(recorded.length, 1)
+    assert.equal(recorded[0].data.id, 'msg-1')
+  } finally { await lease.close() }
+})
+
+test('wait_agent timeout leaves inbox untouched and returns timedOut: true', async () => {
+  const pending = [{ id: 'msg-untouched', source: { kind: 'agent-message' }, content: [{ type: 'text', text: 'later' }] }]
+  const waitStates = []
+  const f = fixture({
+    names: ['wait_agent'],
+    outcome: () => ({ isError: false, value: { timedOut: true }, content: [{ type: 'text', text: '{"timedOut":true}' }] }),
+  })
+  f.agent.inbox = {
+    get nextStep() { return pending },
+    claim() { throw new Error('should not claim on timeout') },
+  }
+  const lease = await f.manager.open({ agent: f.agent, turn: 3, step: 2, signal: f.controller.signal, onWaitingChange: waiting => waitStates.push(waiting) })
+  try {
+    const result = await lease.call({ id: 'wait-timeout', name: 'wait_agent', arguments: { timeout_ms: 10000 } })
+    assert.deepEqual(waitStates, [true, false])
+    assert.deepEqual(JSON.parse(result.content[0].text), { timedOut: true })
+    assert.equal(pending.length, 1)
+  } finally { await lease.close() }
+})

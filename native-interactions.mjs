@@ -7,6 +7,47 @@ const idKey = id => {
   throw bad('Native interaction has an invalid request identity')
 }
 const nonFull = new Set(['read-only', 'workspace-write', 'plan', 'acceptEdits', 'default', 'auto'])
+const SUBAGENT_APPROVAL_ID = 'subagent-approval'
+const SUBAGENT_APPROVE_LABEL = '仅允许本次'
+const SUBAGENT_REJECT_LABEL = '拒绝'
+
+function subagentApprovalQuestion(subagentLabel, method, params) {
+  const scope = JSON.stringify(params, null, 2)
+  const detail = '```json\n' + scope + '\n```'
+  const titleZh = `子代理 ${subagentLabel} 请求执行操作（${method}）`
+  const titleEn = `Subagent ${subagentLabel} requests approval (${method})`
+  return {
+    id: SUBAGENT_APPROVAL_ID,
+    header: `子代理 ${subagentLabel}`,
+    question: `${titleZh}，仅确认本次请求，不扩展整会话或永久授权。`,
+    detail,
+    multiSelect: false,
+    options: [
+      { label: SUBAGENT_APPROVE_LABEL, description: '仅允许本次操作，不修改子代理权限级别' },
+      { label: SUBAGENT_REJECT_LABEL, description: '拒绝本次操作' },
+    ],
+    intent: {
+      kind: 'approval',
+      approve: SUBAGENT_APPROVE_LABEL,
+      reject: SUBAGENT_REJECT_LABEL,
+      subject: { name: `子代理 ${subagentLabel}` },
+      display: {
+        question: { en: `${titleEn} — allow this single operation?`, 'zh-CN': `${titleZh} — 是否仅允许本次操作？` },
+        detail: { en: detail, 'zh-CN': detail },
+        approve: { en: 'Allow once', 'zh-CN': SUBAGENT_APPROVE_LABEL },
+      },
+    },
+  }
+}
+
+function subagentApprovalGranted(answer) {
+  if (!record(answer) || !Array.isArray(answer.answers) || answer.answers.length !== 1) return false
+  const item = answer.answers[0]
+  if (!record(item) || item.id !== SUBAGENT_APPROVAL_ID) return false
+  if (!Array.isArray(item.selected) || item.selected.length !== 1 || item.selected[0] !== SUBAGENT_APPROVE_LABEL) return false
+  if (typeof item.custom === 'string' && item.custom.trim()) return false
+  return true
+}
 
 /** Reviewed protocol subset. Unknown requests never acquire a permissive fallback. */
 export function nativeInteraction(message) {
@@ -77,13 +118,35 @@ function untilAborted(promise, signal) {
 
 /** One live turn only. Replies are one-shot and never replayed after uncertainty. */
 export class NativeInteractionBridge {
-  #ctx; #agent; #peer; #helpers; #threadId; #turnId; #localTurn; #allowPrompts; #permission; #entries = new Map(); #tasks = new Set(); #parent; #abort; #closed = false; #onError
-  constructor({ ctx, agent, peer, helpers, threadId, turnId, turn, signal, permissionModeId, enableApprovalPrompts = false, onError }) {
+  #ctx; #agent; #peer; #helpers; #threadId; #turnId; #localTurn; #allowPrompts; #permission; #entries = new Map(); #tasks = new Set(); #parent; #abort; #closed = false; #onError; #onWaitingChange; #waitingCount = 0
+  constructor({ ctx, agent, peer, helpers, threadId, turnId, turn, signal, permissionModeId, enableApprovalPrompts = false, onError, onWaitingChange }) {
     this.#ctx = ctx; this.#agent = agent; this.#peer = peer; this.#helpers = helpers; this.#threadId = threadId; this.#turnId = turnId; this.#localTurn = turn
-    this.#allowPrompts = enableApprovalPrompts; this.#permission = permissionModeId; this.#onError = onError ?? (() => {}); this.#parent = signal
+    this.#allowPrompts = enableApprovalPrompts; this.#permission = permissionModeId; this.#onError = onError ?? (() => {}); this.#onWaitingChange = onWaitingChange ?? (() => {}); this.#parent = signal
     this.#abort = () => this.cancel()
     signal.addEventListener('abort', this.#abort, { once: true })
     if (signal.aborted) this.cancel()
+  }
+  #enterWait() {
+    this.#waitingCount += 1
+    if (this.#waitingCount === 1) this.#onWaitingChange(true)
+  }
+  #leaveWait() {
+    if (this.#waitingCount <= 0) return
+    this.#waitingCount -= 1
+    if (this.#waitingCount === 0) this.#onWaitingChange(false)
+  }
+  #interactionTarget() {
+    if (this.#agent.session.header.origin !== 'subagent') {
+      return { target: this.#agent, delegated: false, subagentLabel: undefined }
+    }
+    const subagents = this.#ctx.get('subagents')
+    const root = subagents?.rootOf?.(this.#agent)
+    if (!root || root === this.#agent || root.session?.header?.origin === 'subagent') return undefined
+    const agents = this.#ctx.get('agents')
+    if (agents?.get && agents.get(root.id) !== root) return undefined
+    const selfName = subagents?.namesOf?.(this.#agent)?.self
+    const subagentLabel = typeof selfName === 'string' && selfName.trim() ? selfName.trim() : this.#agent.id
+    return { target: root, delegated: true, subagentLabel }
   }
   #log(entry, phase, extra = {}) {
     this.#helpers.appendPluginRecord(this.#agent.session, 'plugin:codexhost/interaction', { sessionId: this.#agent.session.id, threadId: this.#threadId, turnId: this.#turnId(), localTurn: this.#localTurn, requestId: entry.message.id, method: entry.message.method, phase, ...extra })
@@ -123,6 +186,7 @@ export class NativeInteractionBridge {
     if (descriptor.kind === 'approval') {
       const approval = this.#ctx.get('approval')
       let outcome = 'unavailable'
+      let delegatedTo
       if (this.#agent.session.header.origin !== 'subagent' && approval?.request) {
         // Explicitly authorized plugin policy: only this external, non-full Session.
         // Append without injecting a fake user message into the native engine.
@@ -141,29 +205,65 @@ export class NativeInteractionBridge {
         const callId = candidate && events.some(event => event.type === 'tool/call' && event.data.callId === candidate) ? candidate : undefined
         // ApprovalService itself races cancellation and commits approval/decided.
         // Await that audit completion before the enclosing DSH turn can finish.
-        outcome = await approval.request({ agent: this.#agent, toolName: entry.message.method,
-          reason, ...(callId === undefined ? {} : { callId }), signal,
-        })
+        this.#enterWait()
+        try {
+          outcome = await approval.request({ agent: this.#agent, toolName: entry.message.method,
+            reason, ...(callId === undefined ? {} : { callId }), signal,
+          })
+        } finally { this.#leaveWait() }
+      } else if (this.#agent.session.header.origin === 'subagent' && this.#allowPrompts && nonFull.has(this.#permission)) {
+        const routing = this.#interactionTarget()
+        const questions = this.#ctx.get('userQuestions')
+        const rootEvents = routing?.target?.session?.snapshotEvents?.() ?? []
+        const rootPolicy = rootEvents.findLast(event => event.type === 'approval/policy')?.data?.policy
+        const rootPreset = rootEvents.findLast(event => event.type === 'permission/preset')?.data?.preset
+        const rootSandbox = rootEvents.findLast(event => event.type === 'sandbox/mode')?.data?.mode
+        const rootBlocksPrompts = rootPolicy === 'never' && rootPreset !== 'danger-full-access' && rootSandbox !== 'danger-full-access'
+        if (routing?.delegated && questions?.ask && !rootBlocksPrompts) {
+          delegatedTo = routing.target.id
+          const approvalQuestion = subagentApprovalQuestion(routing.subagentLabel, entry.message.method, descriptor.params)
+          this.#enterWait()
+          try {
+            const answer = await untilAborted(Promise.resolve().then(() => questions.ask({ agent: routing.target, questions: [approvalQuestion], signal })), signal)
+            outcome = subagentApprovalGranted(answer) ? 'allowed-once' : 'rejected'
+          } catch (error) {
+            if (signal.aborted) outcome = 'cancelled'
+            else if (['NO_PROVIDER', 'DELEGATED_CALLER', 'CALLER_NOT_LIVE'].includes(error?.code)) outcome = 'unavailable'
+            else throw error
+          } finally { this.#leaveWait() }
+        }
       }
       result = outcome === 'allowed-once' ? descriptor.allow : descriptor.deny
-      this.#log(entry, 'decision', { outcome, result })
+      this.#log(entry, 'decision', { outcome, result, ...(delegatedTo ? { delegatedTo } : {}) })
     } else {
       const questions = this.#ctx.get('userQuestions')
+      const routing = this.#interactionTarget()
+      const delegatedTo = routing?.delegated ? routing.target.id : undefined
       let timer
       const expiry = new AbortController(), askSignal = AbortSignal.any([signal, expiry.signal])
       const ms = descriptor.params.autoResolutionMs
       if (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0) timer = setTimeout(() => expiry.abort(new Error('Native question expired')), Math.min(ms, 2147483647))
       try {
-        if (!questions?.ask) result = { answers: {} }
+        if (!questions?.ask || !routing) result = { answers: {} }
         else {
-          const answer = await untilAborted(Promise.resolve().then(() => questions.ask({ agent: this.#agent, questions: descriptor.questions, signal: askSignal })), askSignal)
+          const presented = routing.delegated
+            ? descriptor.questions.map(question => ({
+              ...question,
+              header: question.header ? `子代理 ${routing.subagentLabel} · ${question.header}` : `子代理 ${routing.subagentLabel}`,
+            }))
+            : descriptor.questions
+          this.#enterWait()
+          let answer
+          try {
+            answer = await untilAborted(Promise.resolve().then(() => questions.ask({ agent: routing.target, questions: presented, signal: askSignal })), askSignal)
+          } finally { this.#leaveWait() }
           result = nativeQuestionAnswer(descriptor, answer)
         }
       } catch (error) {
-        if ((!signal.aborted && expiry.signal.aborted) || ['NO_PROVIDER', 'DELEGATED_CALLER'].includes(error?.code)) result = { answers: {} }
+        if ((!signal.aborted && expiry.signal.aborted) || ['NO_PROVIDER', 'DELEGATED_CALLER', 'CALLER_NOT_LIVE'].includes(error?.code)) result = { answers: {} }
         else throw error
       } finally { clearTimeout(timer) }
-      this.#log(entry, 'decision', { result })
+      this.#log(entry, 'decision', { result, ...(delegatedTo ? { delegatedTo } : {}) })
     }
     await this.#flush()
     if (this.#closed || signal.aborted || entry.state !== 'pending' || this.#parent.aborted) return

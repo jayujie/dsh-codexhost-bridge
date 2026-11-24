@@ -558,7 +558,7 @@ export class NativeSessionDriver {
     const done = Promise.withResolvers(), entry = { agent: payload.agent, done: done.promise }
     this.#active.set(payload.agent.id, entry)
     try {
-      if (this.#collaboration) entry.lease = await this.#collaboration.open(payload)
+      if (this.#collaboration) entry.lease = await this.#collaboration.open({ ...payload, onWaitingChange: waiting => entry.onCollaborationWait?.(waiting) })
       return await this.#run(payload)
     } finally {
       await entry.lease?.close()
@@ -662,11 +662,36 @@ export class NativeSessionDriver {
     let requestStartedAt, requestCompletedAt
     let interrupt
     let cancelledTimer
+    let turnTimer
+    let turnTimerRemaining = this.turnTimeoutMs
+    let turnTimerStartedAt
+    let turnTimerPaused = false
+    let interactionWaiting = false
+    let collaborationWaiting = false
+    const clearTurnTimer = () => { clearTimeout(turnTimer); turnTimer = undefined }
+    const startTurnTimer = () => {
+      if (remoteCompleted || turnTimerPaused || turnTimer !== undefined) return
+      turnTimerStartedAt = performance.now()
+      turnTimer = setTimeout(() => completed.reject(new HostConnectionError('HOST_TURN_TIMEOUT', 'The Host Turn did not finish in time')), Math.max(0, turnTimerRemaining))
+    }
+    const syncTurnTimer = () => {
+      const nextPaused = interactionWaiting || collaborationWaiting
+      if (nextPaused === turnTimerPaused) return
+      turnTimerPaused = nextPaused
+      if (turnTimerPaused) {
+        if (turnTimer !== undefined && turnTimerStartedAt !== undefined) {
+          turnTimerRemaining = Math.max(0, turnTimerRemaining - (performance.now() - turnTimerStartedAt))
+        }
+        clearTurnTimer()
+      } else startTurnTimer()
+    }
+    entry.onCollaborationWait = waiting => { collaborationWaiting = waiting; syncTurnTimer() }
     const buffered = []
     const interactions = new NativeInteractionBridge({ ctx: this.#ctx, agent, peer, helpers: this.#helpers,
       threadId: state.threadId, turnId: () => hostTurnId, turn, signal,
       permissionModeId: catalog.selection.permissionModeId, enableApprovalPrompts: this.#nativeInteractionApprovals,
       onError: error => completed.reject(error),
+      onWaitingChange: waiting => { interactionWaiting = waiting; syncTurnTimer() },
     })
     const accept = message => {
       const params = message.params ?? {}
@@ -714,7 +739,7 @@ export class NativeSessionDriver {
       void interrupt.catch(error => completed.reject(error))
       cancelledTimer ??= setTimeout(() => completed.reject(new HostConnectionError('HOST_CANCEL_UNCONFIRMED', 'Host cancellation could not be confirmed; the session will not be resubmitted automatically')), this.cancelTimeoutMs)
     }
-    const timer = setTimeout(() => completed.reject(new HostConnectionError('HOST_TURN_TIMEOUT', 'The Host Turn did not finish in time')), this.turnTimeoutMs)
+    startTurnTimer()
     signal.addEventListener('abort', interruptRemote)
     try {
       await this.#save(agent.session, { ...state, phase: 'submitted', localTurn: turn })
@@ -764,7 +789,8 @@ export class NativeSessionDriver {
       if (remoteCompleted || !startDispatched || startRejected) await this.#save(agent.session, { ...state, phase: 'ready', ...(hostTurnId ? { lastHostTurnId: hostTurnId } : {}) })
       throw error
     } finally {
-      clearTimeout(timer)
+      entry.onCollaborationWait = undefined
+      clearTurnTimer()
       clearTimeout(cancelledTimer)
       signal.removeEventListener('abort', interruptRemote)
       unsubscribe()

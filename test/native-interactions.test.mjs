@@ -28,18 +28,25 @@ function fixture(options = {}) {
     })
   } }
   const userQuestions = { async ask(value) { asks.push(value); asked.resolve(value); return options.answer ? options.answer(value) : { answers: value.questions.map(item => ({ id: item.id, selected: ['保留'] })) } } }
-  const services = { approval: options.noApproval ? undefined : approval, userQuestions: options.noQuestions ? undefined : userQuestions }
+  const services = {
+    approval: options.noApproval ? undefined : approval,
+    userQuestions: options.noQuestions ? undefined : userQuestions,
+    ...(options.subagents ? { subagents: options.subagents } : {}),
+    ...(options.agents ? { agents: options.agents } : {}),
+  }
   const ctx = { get: key => services[key], sessionPersistence: { async flush() { await options.flush?.() } } }
   const helpers = { appendPluginRecord: (s, type, data) => s.append(type, data) }
   const peer = { async respond(id, result) {
     replies.push({ id, result }); for (const waiter of waiters) if (replies.length >= waiter.n) waiter.resolve()
     if (options.writeError) throw options.writeError
   } }
+  const waitStates = []
   const bridge = new NativeInteractionBridge({ ctx, agent, peer, helpers, threadId: 'thread', turnId: () => 'turn', turn: 1, signal: abort.signal,
     permissionModeId: options.permission ?? 'plan', enableApprovalPrompts: options.enablePrompts === true,
     onError(error) { errors.push(error); failed.resolve(error) },
+    onWaitingChange(waiting) { waitStates.push(waiting); options.onWaitingChange?.(waiting) },
   })
-  return { bridge, events, replies, errors, asks, approvals, asked: asked.promise, failed: failed.promise, abort, agent, ctx, helpers, globalPolicy,
+  return { bridge, events, replies, errors, asks, approvals, waitStates, asked: asked.promise, failed: failed.promise, abort, agent, ctx, helpers, globalPolicy,
     written(n = 1) { if (replies.length >= n) return Promise.resolve(); const wait = deferred(); waiters.push({ n, resolve: wait.resolve }); return wait.promise },
   }
 }
@@ -228,5 +235,172 @@ for (const harness of ['codex', 'claude-code']) test(`actual ${harness} driver p
     human.resolve(harness === 'codex' ? 'allowed-once' : { answers: [{ id: 'q', selected: ['保留'] }] })
     await running; assert.equal(nativeThreadState(session).phase, 'ready')
     assert.equal(calls.filter(method => method === 'turn/start').length, 1); assert.equal(calls.filter(method => method === 'respond').length, 1); assert.equal(calls.includes('turn/interrupt'), false)
+  } finally { await driver.dispose() }
+})
+
+test('subagent question escalates to the live root agent with subagent identity and waits for human reply', async () => {
+  const human = deferred()
+  const rootEvents = [{ type: 'approval/policy', data: { policy: 'ask' } }]
+  const root = { id: 'root-session', session: { id: 'root-session', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+  const f = fixture({
+    origin: 'subagent',
+    policy: 'never',
+    answer: () => human.promise,
+    subagents: { rootOf: () => root, namesOf: () => ({ self: 'worker-1', parent: 'lead' }) },
+    agents: { get: id => (id === root.id ? root : undefined) },
+  })
+  f.bridge.accept(question({ header: '部署方式' }))
+  const ask = await f.asked
+  assert.equal(ask.agent, root)
+  assert.equal(ask.questions[0].header, '子代理 worker-1 · 部署方式')
+  assert.equal(f.replies.length, 0)
+  assert.deepEqual(f.waitStates, [true])
+  human.resolve({ answers: [{ id: 'q', selected: ['替换'] }] })
+  await f.written(); await f.bridge.close()
+  assert.deepEqual(f.replies[0].result, { answers: { q: { answers: ['替换'] } } })
+  assert.equal(f.events.findLast(e => e.data.phase === 'decision').data.delegatedTo, 'root-session')
+  assert.deepEqual(f.waitStates, [true, false])
+})
+
+test('subagent approval escalates to live root via approval-intent question card and grants only on exact one-time match', async () => {
+  const human = deferred()
+  const rootEvents = [{ type: 'approval/policy', data: { policy: 'ask' } }]
+  const root = { id: 'root-session', session: { id: 'root-session', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+  const f = fixture({
+    origin: 'subagent',
+    policy: 'never',
+    permission: 'workspace-write',
+    enablePrompts: true,
+    answer: () => human.promise,
+    subagents: { rootOf: () => root, namesOf: () => ({ self: 'executor-1', parent: 'lead' }) },
+    agents: { get: id => (id === root.id ? root : undefined) },
+  })
+  f.bridge.accept(request('item/commandExecution/requestApproval', { command: 'npm test', cwd: 'D:/test' }))
+  const ask = await f.asked
+  assert.equal(ask.agent, root)
+  assert.equal(ask.questions.length, 1)
+  const item = ask.questions[0]
+  assert.equal(item.intent.kind, 'approval')
+  assert.equal(item.intent.always, undefined)
+  assert.equal(item.multiSelect, false)
+  assert.match(item.detail, /npm test/)
+  assert.deepEqual(item.options.map(o => o.label), [item.intent.approve, item.intent.reject])
+  assert.equal(f.replies.length, 0)
+  assert.deepEqual(f.waitStates, [true])
+  human.resolve({ answers: [{ id: item.id, selected: [item.intent.approve] }] })
+  await f.written(); await f.bridge.close()
+  assert.deepEqual(f.replies[0].result, { decision: 'accept' })
+  assert.equal(f.events.findLast(e => e.type === 'approval/policy').data.policy, 'never')
+  assert.equal(f.events.findLast(e => e.data.phase === 'decision').data.delegatedTo, 'root-session')
+  assert.deepEqual(f.waitStates, [true, false])
+})
+
+test('subagent approval still escalates when root is in danger-full-access preset with approval/policy never', async () => {
+  const rootEvents = [
+    { type: 'permission/preset', data: { preset: 'danger-full-access' } },
+    { type: 'sandbox/mode', data: { mode: 'danger-full-access' } },
+    { type: 'approval/policy', data: { policy: 'never' } },
+  ]
+  const root = { id: 'root-full', session: { id: 'root-full', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+  const f = fixture({
+    origin: 'subagent',
+    policy: 'never',
+    permission: 'workspace-write',
+    enablePrompts: true,
+    answer: value => ({ answers: [{ id: value.questions[0].id, selected: [value.questions[0].intent.approve] }] }),
+    subagents: { rootOf: () => root, namesOf: () => ({ self: 'codex-child' }) },
+    agents: { get: id => (id === root.id ? root : undefined) },
+  })
+  f.bridge.accept(request('item/commandExecution/requestApproval', { command: 'curl https://example.com' }))
+  await f.written(); await f.bridge.close()
+  assert.deepEqual(f.replies[0].result, { decision: 'accept' })
+  assert.equal(f.asks.length, 1)
+  assert.equal(f.asks[0].agent, root)
+})
+
+for (const scenario of [
+  { name: 'reject option selected', rootPolicy: 'ask', liveRoot: true, reply: item => ({ answers: [{ id: item.id, selected: [item.intent.reject] }] }) },
+  { name: 'skipped empty answer', rootPolicy: 'ask', liveRoot: true, reply: item => ({ answers: [{ id: item.id, selected: [] }] }) },
+  { name: 'custom text attached', rootPolicy: 'ask', liveRoot: true, reply: item => ({ answers: [{ id: item.id, selected: [item.intent.approve], custom: 'extra' }] }) },
+  { name: 'root policy is never', rootPolicy: 'never', liveRoot: true, reply: item => ({ answers: [{ id: item.id, selected: [item.intent.approve] }] }) },
+  { name: 'root is not live', rootPolicy: 'ask', liveRoot: false, reply: item => ({ answers: [{ id: item.id, selected: [item.intent.approve] }] }) },
+]) {
+  test(`subagent approval fails closed when ${scenario.name}`, async () => {
+    const rootEvents = [{ type: 'approval/policy', data: { policy: scenario.rootPolicy } }]
+    const root = { id: 'root-session', session: { id: 'root-session', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+    const f = fixture({
+      origin: 'subagent',
+      policy: 'never',
+      permission: 'workspace-write',
+      enablePrompts: true,
+      answer: value => scenario.reply(value.questions[0]),
+      subagents: { rootOf: () => root, namesOf: () => ({ self: 'executor-2' }) },
+      agents: { get: id => (scenario.liveRoot && id === root.id ? root : undefined) },
+    })
+    f.bridge.accept(request())
+    await f.written(); await f.bridge.close()
+    assert.deepEqual(f.replies[0].result, { decision: 'decline' })
+    assert.equal(f.events.findLast(e => e.type === 'approval/policy').data.policy, 'never')
+  })
+}
+
+test('cancelling a subagent while waiting on root approval card aborts the UI card and logs cancelled', async () => {
+  const rootEvents = [{ type: 'approval/policy', data: { policy: 'ask' } }]
+  const root = { id: 'root-session', session: { id: 'root-session', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+  const f = fixture({
+    origin: 'subagent',
+    policy: 'never',
+    permission: 'workspace-write',
+    enablePrompts: true,
+    answer: () => new Promise(() => {}),
+    subagents: { rootOf: () => root, namesOf: () => ({ self: 'executor-3' }) },
+    agents: { get: id => (id === root.id ? root : undefined) },
+  })
+  f.bridge.accept(request())
+  const ask = await f.asked
+  f.abort.abort(); await f.bridge.close()
+  assert.equal(ask.signal.aborted, true)
+  assert.equal(f.replies.length, 0)
+  assert.equal(f.events.findLast(e => e.data.phase === 'decision').data.outcome, 'cancelled')
+  assert.deepEqual(f.waitStates, [true, false])
+})
+
+test('driver pauses turnTimeoutMs while waiting for a human subagent interaction', async () => {
+  const events = [], listeners = new Set(), human = deferred(), seen = deferred()
+  const rootEvents = [{ type: 'approval/policy', data: { policy: 'ask' } }]
+  const root = { id: 'root-local', session: { id: 'root-local', header: { cwd: 'D:/test' }, snapshotEvents: () => rootEvents } }
+  const session = { id: 'child-local', header: { cwd: 'D:/test', origin: 'subagent' }, snapshotEvents: () => events, append(type, data) { const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }; events.push(event); return event } }
+  session.append('plugin:codexhost/thread', { version: 1, sessionId: 'child-local', phase: 'ready', harnessId: 'codex', threadId: 'thread', appliedConfiguration: { modelId: 'test', permissionModeId: 'workspace-write' } })
+  session.append('plugin:codexhost/configuration', { harnessId: 'codex', modelId: 'test', permissionModeId: 'workspace-write' })
+  const emit = value => { for (const listener of listeners) listener(value) }
+  const peer = { closed: new Promise(() => {}), close() {}, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, async request(method) {
+    if (method === 'model/list') return { data: [{ model: 'test', isDefault: true }] }
+    if (method === 'codexhost/harness/inspect') return { status: 'ready', catalog: { models: [{ ref: { id: 'test' }, label: 'test' }] } }
+    if (method === 'codexhost/thread/usage/inspect') return {}
+    if (method === 'thread/read') return { thread: { id: 'thread', status: { type: 'idle' } } }
+    if (method === 'thread/resume') return { thread: { id: 'thread' } }
+    if (method === 'turn/start') { queueMicrotask(() => emit(request('item/commandExecution/requestApproval', { command: 'echo ok' }))); return { turn: { id: 'turn' } } }
+    throw new Error(method)
+  }, async respond(id, result) {
+    assert.equal(id, 1); assert.deepEqual(result, { decision: 'accept' })
+    queueMicrotask(() => emit({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } }))
+  } }
+  const services = {
+    subagents: { rootOf: () => root, namesOf: () => ({ self: 'slow-worker' }) },
+    agents: { get: id => (id === root.id ? root : undefined) },
+    userQuestions: { async ask(value) { seen.resolve(value); return human.promise } },
+  }
+  const ctx = { get: key => services[key], agentPresets: { presetForSession: () => 'codexhost-codex' }, sessionPersistence: { async flush() {} } }
+  const helpers = { appendPluginRecord: (s, type, data) => s.append(type, data), agentEvents: () => ({ emit() {} }), AssistantStreamAccumulator: class { push(value) { return value } snapshot() { return [] } }, BlockAssembler: class { push() {} blocks() { return [] } } }
+  const driver = new NativeSessionDriver(ctx, helpers, { connect: async () => peer, turnTimeoutMs: 120, cancelTimeoutMs: 20, nativeInteractionApprovals: true })
+  const agent = { id: 'child-local', session }, signal = new AbortController().signal
+  try {
+    const running = driver.run({ agent, messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'run task' }] }], turn: 1, step: 1, signal })
+    const ask = await seen.promise
+    // Wait longer than turnTimeoutMs (120ms) while human is deciding.
+    await new Promise(resolve => setTimeout(resolve, 200))
+    human.resolve({ answers: [{ id: ask.questions[0].id, selected: [ask.questions[0].intent.approve] }] })
+    await running
+    assert.equal(nativeThreadState(session).phase, 'ready')
   } finally { await driver.dispose() }
 })

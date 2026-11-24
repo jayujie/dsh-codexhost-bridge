@@ -9,7 +9,28 @@ const names = new Set(['subagent', 'list_host_subagent_models', 'list_subagent_m
 const allowed = name => names.has(name) || /^team_task_(create|list|get|update)$/.test(name)
 const failure = text => ({ isError: true, content: [{ type: 'text', text }] })
 // Returned on discovery, not appended to every native input or added to tool schemas.
-const COLLABORATION_INSTRUCTIONS = 'Use subagent for delegation. Set engine=codex, claude-code, or antigravity for external teammates, or omit engine for native DSH. Query list_host_subagent_models for external model and reasoning_effort ids; omit provider for external engines. Use list_agents and send_message to discover and follow up with named teammates. The standard tree, depth, scopes and current Team mode apply. Team mode does not require creating teammates or tasks. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent CodexHost child. When team_task_* tools are admitted, task owners are names from list_agents. Read current revisions before claim/update, partition write scopes, and respect dependencies. Task updates do not wake teammates; use send_message explicitly. Wait for required results before a final answer. Discover tools again when current capabilities are unknown; discovery itself starts no work.'
+const COLLABORATION_INSTRUCTIONS = 'Use subagent for delegation. Set engine=codex, claude-code, or antigravity for external teammates, or omit engine for native DSH. Query list_host_subagent_models for external model and reasoning_effort ids; omit provider for external engines. Use list_agents, send_message, wait_agent, and interrupt_agent to discover, follow up with, and wait for named teammates. The standard tree, depth, scopes and current Team mode apply. Team mode does not require creating teammates or tasks. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent CodexHost child. When team_task_* tools are admitted, task owners are names from list_agents. Read current revisions before claim/update, partition write scopes, and respect dependencies. Task updates do not wake teammates; use send_message explicitly. Wait for required results before a final answer. Discover tools again when current capabilities are unknown; discovery itself starts no work.'
+
+function waitTimedOutFlag(result) {
+  if (result?.value && typeof result.value.timedOut === 'boolean') return result.value.timedOut
+  const text = result?.content?.find(block => block?.type === 'text' && typeof block.text === 'string')?.text
+  if (!text) return undefined
+  try {
+    const parsed = JSON.parse(text)
+    return typeof parsed?.timedOut === 'boolean' ? parsed.timedOut : undefined
+  } catch { return undefined }
+}
+
+function summarizeInboxMessage(message) {
+  const text = Array.isArray(message?.content)
+    ? message.content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    : ''
+  return {
+    ...(message?.id ? { id: message.id } : {}),
+    ...(message?.source ? { source: message.source } : {}),
+    text,
+  }
+}
 
 /** One execution path for both native transports; all policy and logging remain in DSH tools. */
 export class HostCollaboration {
@@ -17,12 +38,15 @@ export class HostCollaboration {
     if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 256) throw new Error('maxOutputBytes must be at least 256')
     this.ctx = ctx; this.helpers = helpers; this.maxOutputBytes = maxOutputBytes; this.leases = new Set(); this.closed = false
   }
-  async open({ agent, turn, step, signal }) {
+  async open({ agent, turn, step, signal, onWaitingChange }) {
     if (this.closed) throw new Error('Collaboration bridge is closed')
     signal.throwIfAborted()
     const toolSet = await this.ctx.tools.resolve({ agent, modelSelection: agent.model.current(), signal })
     const controller = new AbortController(), activeSignal = AbortSignal.any([signal, controller.signal]), requests = new Map()
-    let closed = false, closing
+    let closed = false, closing, activeWaits = 0
+    const notifyWait = onWaitingChange ?? (() => {})
+    const enterWait = () => { activeWaits += 1; if (activeWaits === 1) notifyWait(true) }
+    const leaveWait = () => { if (activeWaits <= 0) return; activeWaits -= 1; if (activeWaits === 0) notifyWait(false) }
     const admitted = () => this.ctx.tools.schemas(agent, toolSet).filter(tool => allowed(tool.name))
     const schemas = admitted()
     const lease = {
@@ -42,6 +66,7 @@ export class HostCollaboration {
         const flush = () => this.ctx.sessionPersistence.flush(agent.session)
         const promise = Promise.resolve().then(async () => {
           let call
+          const isWait = !background && request.name === 'wait_agent'
           try {
             activeSignal.throwIfAborted()
             log('request', { arguments: request.arguments ?? {} }); await flush()
@@ -56,11 +81,28 @@ export class HostCollaboration {
               const source = nativeModelSource(lease.source?.provider, lease.source?.model)
               call = { type: 'tool-call', id: this.helpers.ToolCallId(`hostcollab:${turn}:${request.id}`), name: request.name, arguments: JSON.stringify(request.arguments ?? {}) }
               agent.session.append('assistant/message', { turn, step, message: this.helpers.createAssistantMessage({ content: [call], source }), stream: [] }, { surfaceOp: 'append' })
-              const batch = await this.ctx.tools.execute({ agent, calls: [call], signal: activeSignal, toolSet, log: { turn, step }, maxParallelToolCalls: 1 })
+              let batch
+              if (isWait) enterWait()
+              try {
+                batch = await this.ctx.tools.execute({ agent, calls: [call], signal: activeSignal, toolSet, log: { turn, step }, maxParallelToolCalls: 1 })
+              } finally {
+                if (isWait) leaveWait()
+              }
               for (const context of batch.additionalContexts) agent.inject(context)
               const result = batch.results[0]?.result
               if (!result) throw new Error('Collaboration tool returned no result')
-              output = this.bound({ ...(result.isError ? { isError: true } : {}), content: result.content.filter(block => block.type === 'text').map(block => ({ type: 'text', text: block.text })) })
+              if (isWait && !result.isError && waitTimedOutFlag(result) === false && Array.isArray(agent.inbox?.nextStep) && agent.inbox.nextStep.length > 0) {
+                const claimed = typeof agent.inbox.claim === 'function'
+                  ? agent.inbox.claim('next-step', turn)
+                  : typeof agent.inbox.splice === 'function'
+                    ? agent.inbox.splice('next-step', 0, agent.inbox.nextStep.length, [])
+                    : []
+                if (claimed.length > 0) {
+                  for (const msg of claimed) agent.session.append('user/message', msg, { surfaceOp: 'append' })
+                  output = this.bound({ content: [{ type: 'text', text: JSON.stringify({ timedOut: false, messages: claimed.map(summarizeInboxMessage) }) }] })
+                }
+              }
+              output ??= this.bound({ ...(result.isError ? { isError: true } : {}), content: result.content.filter(block => block.type === 'text').map(block => ({ type: 'text', text: block.text })) })
             }
             log('result', { result: output }); await flush()
             return output
@@ -105,7 +147,7 @@ export class HostCollaboration {
 /** Private SDK-only callback. Identity comes from the active driver, never from an arbitrary Session id. */
 export async function installCollaborationBridge(ctx, driver, helpers, options = {}) {
   const manager = new HostCollaboration(ctx, helpers, options), token = randomBytes(32).toString('hex')
-  const server = createServer(async (request, response) => {
+  const server = createServer({ requestTimeout: 0, headersTimeout: 10_000 }, async (request, response) => {
     const answer = (status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
     const supplied = Buffer.from(request.headers.authorization ?? ''), expected = Buffer.from('Bearer ' + token)
     if (request.method !== 'POST' || request.url !== '/collaboration' || request.headers.origin || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { answer(403, {}); return }
