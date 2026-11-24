@@ -6,6 +6,13 @@ export function patchAntigravityPerf(source, replace) {
     'allow slow agy models probe on Windows',
   );
 
+  source = replace(
+    source,
+    'var DEFAULT_PRINT_TIMEOUT = "30m";',
+    'var DEFAULT_PRINT_TIMEOUT = "0s";',
+    'disable hardcoded 30m agy --print-timeout so DSH nativeTurnTimeoutMs governs long turns',
+  );
+
   // 0. Context window (516K) + /compact command + canonical model ID for pricing + cache-aware hostUsage + UsageMeter metering.
   source = replace(
     source,
