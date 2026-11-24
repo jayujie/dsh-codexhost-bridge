@@ -13,6 +13,7 @@ import { hostFormat } from './native-host-format.mjs'
 import { DelegationPicker, installDelegationSource, delegationCss } from './delegation-client.mjs'
 import { DELEGATION_SOURCE, delegationReference } from './delegation-mentions.mjs'
 import { installNativeRepliesClient } from './native-replies-client.mjs'
+import { installNativeCompactionClient } from './native-compaction-client.mjs'
 
 const NS = 'codexhost'
 const AGENTS = [{ id: 'codex', label: 'Codex' }, { id: 'claude-code', label: 'Claude Code' }, { id: 'antigravity', label: 'Antigravity' }, { id: 'deepseek-harness', label: 'DSH' }]
@@ -147,6 +148,7 @@ export async function apply(ctx) {
   })
   ctx.inject(['uiSession', 'uiConversation', 'remote.session', 'sidebarRight', 'fileDrag'], scope => {
     scope.effect(() => installNativeRepliesClient(scope), 'codexhost: native reply display')
+    scope.effect(() => installNativeCompactionClient(scope), 'codexhost: native compaction display')
     scope.slots.inject('tool.call.toolview', () => scope.effect(() => {
       const aliases = { Read: 'read', Write: 'write', Edit: 'edit', Grep: 'grep', Glob: 'glob', Bash: 'bash', PowerShell: 'pwsh', exec_command: 'pwsh', fileChange: 'edit' }
       const disposers = []

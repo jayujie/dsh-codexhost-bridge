@@ -693,6 +693,42 @@ export class NativeSessionDriver {
       onError: error => completed.reject(error),
       onWaitingChange: waiting => { interactionWaiting = waiting; syncTurnTimer() },
     })
+    const compactionBeforeTokens = Number.isFinite(usageBefore?.contextUsedTokens) && usageBefore.contextUsedTokens > 0 ? usageBefore.contextUsedTokens : undefined
+    const compactionBeforeWindow = Number.isFinite(usageBefore?.contextWindowTokens) && usageBefore.contextWindowTokens > 0 ? usageBefore.contextWindowTokens : undefined
+    const compactions = new Map()
+    const compactionAliases = new Map()
+    let manualCompactionId
+    const recordCompaction = (id, patch) => {
+      if (!hostTurnId) return
+      const previous = compactions.get(id)
+      const next = {
+        id,
+        mode: patch.mode ?? previous?.mode ?? 'auto',
+        phase: patch.phase ?? previous?.phase ?? 'started',
+        beforeTokens: patch.beforeTokens ?? previous?.beforeTokens,
+        afterTokens: patch.afterTokens ?? previous?.afterTokens,
+        contextWindowTokens: patch.contextWindowTokens ?? previous?.contextWindowTokens,
+        summary: patch.summary ?? previous?.summary,
+        error: patch.error ?? previous?.error,
+      }
+      if (previous && JSON.stringify(previous) === JSON.stringify(next)) return
+      compactions.set(id, next)
+      this.#helpers.appendPluginRecord(agent.session, 'plugin:codexhost/compaction', {
+        version: 1,
+        harnessId,
+        threadId: state.threadId,
+        turnId: hostTurnId,
+        localTurn: turn,
+        compactionId: id,
+        mode: next.mode,
+        phase: next.phase,
+        ...(next.beforeTokens === undefined ? {} : { beforeTokens: next.beforeTokens }),
+        ...(next.afterTokens === undefined ? {} : { afterTokens: next.afterTokens }),
+        ...(next.contextWindowTokens === undefined ? {} : { contextWindowTokens: next.contextWindowTokens }),
+        ...(next.summary ? { summary: next.summary } : {}),
+        ...(next.error ? { error: next.error } : {}),
+      })
+    }
     const accept = message => {
       const params = message.params ?? {}
       const eventTurnId = params.turnId ?? params.turn?.id
@@ -714,11 +750,59 @@ export class NativeSessionDriver {
         this.#handOffBackground(message, { peer, agent, harnessId, threadId: state.threadId, projector })
         if (message.method === 'thread/tokenUsage/updated' || message.method === 'codexhost/thread/tokenUsage/updated') liveUsage = observedUsage(params.tokenUsage?.total)
         if (message.method === 'thread/name/updated') this.#syncNativeTitle(agent, params.threadName)
-        if (message.method === 'item/completed' && !['userMessage', 'agentMessage', 'reasoning'].includes(params.item?.type)) {
+        if (message.method === 'codexhost/thread/manual-compaction/started') {
+          if (!manualCompactionId) {
+            manualCompactionId = `manual:${hostTurnId}`
+            recordCompaction(manualCompactionId, { mode: 'manual', phase: 'started', beforeTokens: compactionBeforeTokens, contextWindowTokens: compactionBeforeWindow })
+          }
+        }
+        if ((message.method === 'item/started' || message.method === 'codexhost/item/started') && params.item?.type === 'contextCompaction') {
+          const itemId = (typeof params.item.id === 'string' && params.item.id) ? params.item.id : (typeof params.item.itemId === 'string' && params.item.itemId) ? params.item.itemId : 'contextCompaction'
+          const targetId = manualCompactionId && compactions.get(manualCompactionId)?.phase === 'started' ? manualCompactionId : itemId
+          compactionAliases.set(itemId, targetId)
+          recordCompaction(targetId, {
+            mode: manualCompactionId === targetId || nativeCommand?.name === 'compact' ? 'manual' : 'auto',
+            phase: 'started',
+            beforeTokens: compactionBeforeTokens,
+            contextWindowTokens: compactionBeforeWindow,
+          })
+        }
+        if ((message.method === 'item/completed' || message.method === 'codexhost/item/completed') && params.item?.type === 'contextCompaction') {
+          const itemId = (typeof params.item.id === 'string' && params.item.id) ? params.item.id : (typeof params.item.itemId === 'string' && params.item.itemId) ? params.item.itemId : 'contextCompaction'
+          const targetId = compactionAliases.get(itemId) ?? (manualCompactionId && compactions.get(manualCompactionId)?.phase === 'started' ? manualCompactionId : itemId)
+          compactionAliases.set(itemId, targetId)
+          const failed = params.outcome?.status === 'failed' || params.outcome?.status === 'cancelled' || params.item.status === 'failed'
+          const summary = typeof params.item.summary === 'string' ? params.item.summary : typeof params.item.text === 'string' ? params.item.text : undefined
+          const errorText = params.outcome?.error?.message ?? params.item.error?.message
+          const afterTokens = Number.isFinite(liveUsage?.contextUsedTokens) && liveUsage.contextUsedTokens > 0 ? liveUsage.contextUsedTokens : undefined
+          const afterWindow = Number.isFinite(liveUsage?.contextWindowTokens) && liveUsage.contextWindowTokens > 0 ? liveUsage.contextWindowTokens : compactionBeforeWindow
+          recordCompaction(targetId, {
+            mode: manualCompactionId === targetId || nativeCommand?.name === 'compact' ? 'manual' : 'auto',
+            phase: failed ? 'failed' : 'completed',
+            beforeTokens: compactionBeforeTokens,
+            ...(afterTokens === undefined ? {} : { afterTokens }),
+            ...(afterWindow === undefined ? {} : { contextWindowTokens: afterWindow }),
+            ...(summary ? { summary } : {}),
+            ...(failed && errorText ? { error: errorText } : {}),
+          })
+        }
+        if (message.method === 'item/completed' && !['userMessage', 'agentMessage', 'reasoning', 'contextCompaction'].includes(params.item?.type)) {
           this.#helpers.appendPluginRecord(agent.session, 'plugin:codexhost/item', { threadId: state.threadId, turnId: hostTurnId, item: params.item })
         }
         if (message.method === 'turn/completed') {
           if (remoteCompleted) return
+          for (const item of compactions.values()) {
+            if (item.phase !== 'started') continue
+            const failed = params.turn?.status !== 'completed'
+            const afterTokens = Number.isFinite(liveUsage?.contextUsedTokens) && liveUsage.contextUsedTokens > 0 ? liveUsage.contextUsedTokens : undefined
+            const afterWindow = Number.isFinite(liveUsage?.contextWindowTokens) && liveUsage.contextWindowTokens > 0 ? liveUsage.contextWindowTokens : compactionBeforeWindow
+            recordCompaction(item.id, {
+              phase: failed ? 'failed' : 'completed',
+              ...(afterTokens === undefined ? {} : { afterTokens }),
+              ...(afterWindow === undefined ? {} : { contextWindowTokens: afterWindow }),
+              ...(failed ? { error: params.turn?.error?.message ?? (params.turn?.status === 'interrupted' ? '上下文压缩已中断' : '上下文压缩失败') } : {}),
+            })
+          }
           if (params.turn?.status === 'failed') this.#helpers.appendPluginRecord(agent.session, HOST_TURN_FAILURE, {
             version: 1, turn, step, harnessId, threadId: state.threadId, hostTurnId,
             failure: observedTurnFailure(params.turn.error),
@@ -760,6 +844,10 @@ export class NativeSessionDriver {
       entry.submitting = false
       if (typeof hostTurnId !== 'string') throw new HostConnectionError('HOST_INVALID_TURN', 'CodexHost did not return a native Turn identity')
       await this.#save(agent.session, { ...state, phase: 'submitted', localTurn: turn, hostTurnId })
+      if (nativeCommand?.name === 'compact' && !manualCompactionId) {
+        manualCompactionId = `manual:${hostTurnId}`
+        recordCompaction(manualCompactionId, { mode: 'manual', phase: 'started', beforeTokens: compactionBeforeTokens, contextWindowTokens: compactionBeforeWindow })
+      }
       for (const message of buffered.splice(0)) accept(message)
       if (signal.aborted) interruptRemote()
       const result = await Promise.race([completed.promise, peer.closed.then(error => { throw error })])
@@ -801,7 +889,22 @@ export class NativeSessionDriver {
       agent.session.append('step/end', { turn, step })
       const timing = usage => turnTimingUsage(usageBefore, liveUsage ?? usage, requestCompletedAt - requestStartedAt, projector.hasMeasuredStream)
       const metadata = this.#observe(peer, agent, state, catalog.selection.modelId, false, timing, liveUsage)
-        .then(async () => {
+        .then(async observedAfter => {
+          const afterTokens = Number.isFinite(observedAfter?.contextUsedTokens) && observedAfter.contextUsedTokens > 0 ? observedAfter.contextUsedTokens : undefined
+          const afterWindow = Number.isFinite(observedAfter?.contextWindowTokens) && observedAfter.contextWindowTokens > 0 ? observedAfter.contextWindowTokens : compactionBeforeWindow
+          let compactionUpdated = false
+          for (const item of compactions.values()) {
+            if (item.phase !== 'completed' || afterTokens === undefined || item.afterTokens === afterTokens) continue
+            recordCompaction(item.id, { phase: 'completed', afterTokens, ...(afterWindow === undefined ? {} : { contextWindowTokens: afterWindow }) })
+            compactionUpdated = true
+          }
+          if (!compactionUpdated && !newThread && remoteStatus === 'completed' && compactions.size === 0 && hostTurnId
+            && compactionBeforeTokens !== undefined && compactionBeforeTokens >= 80_000
+            && afterTokens !== undefined && afterTokens <= compactionBeforeTokens * 0.55) {
+            recordCompaction(`observed:${hostTurnId}`, { mode: 'auto', phase: 'completed', beforeTokens: compactionBeforeTokens, afterTokens, ...(afterWindow === undefined ? {} : { contextWindowTokens: afterWindow }) })
+            compactionUpdated = true
+          }
+          if (compactionUpdated) await this.#ctx.sessionPersistence?.flush?.()
           if (nativeCommand || signal.aborted || this.#stopped || remoteStatus !== 'completed') return
           const titleSignal = AbortSignal.any([signal, this.#metadataAbort.signal])
           // Retry missing titles from the first human message, not only on the initial turn.

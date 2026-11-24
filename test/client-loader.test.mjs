@@ -68,7 +68,8 @@ test('client artifact mounts native remotes and additive Composer controls witho
     },
   }
   await module.apply(ctx)
-  assert.deepEqual(replyDefinitions.map(d => d.target).sort(), ['chat', 'trajectory'])
+  assert.deepEqual(replyDefinitions.map(d => d.target).sort(), ['chat', 'chat', 'trajectory'])
+  assert.deepEqual(replyDefinitions.map(d => d.kind).sort(), ['codexhost-native-compaction-chat', 'codexhost-native-reply-chat', 'codexhost-native-reply-trajectory'])
   assert.equal(dockListeners.size, 1, 'Wait for actual native entries, not just the slot declaration')
   dockReady = true
   for (const callback of dockListeners) callback()
