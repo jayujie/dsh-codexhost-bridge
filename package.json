@@ -1,6 +1,6 @@
 {
   "name": "dsh-host",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "DSH Host plugin for DeepSeek Harness — run Codex, Claude Code, and Antigravity natively inside DSH with a plugin-owned local backend.",
   "private": false,
   "type": "module",
