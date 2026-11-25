@@ -16,12 +16,12 @@ for (const [id, filename, mime] of [['codex', 'codex.png', 'image/png'], ['claud
 const iconSource = `export const AGENT_ICONS = ${JSON.stringify(icons)}\n`
 await writeFile(new URL('./icons.mjs', import.meta.url), iconSource)
 const contract = (await readFile(new URL('./remote-contract.mjs', import.meta.url), 'utf8')).replace(/^export /gm, '')
-const consoleModules = await Promise.all(['console-contract.mjs', 'console-client.mjs', 'preset-view.mjs', 'native-ui-projections.mjs', 'native-context.mjs', 'native-host-format.mjs', 'delegation-mentions.mjs', 'delegation-client.mjs', 'permission-presentation.mjs', 'slider-runtime.mjs', 'native-model-runtime.mjs', 'native-replies-client.mjs', 'native-compaction-client.mjs'].map(async name =>
+const consoleModules = await Promise.all(['console-contract.mjs', 'console-client.mjs', 'preset-view.mjs', 'native-ui-projections.mjs', 'native-context.mjs', 'native-host-format.mjs', 'delegation-mentions.mjs', 'delegation-client.mjs', 'permission-presentation.mjs', 'slider-runtime.mjs', 'native-model-runtime.mjs', 'native-replies-client.mjs', 'native-compaction-client.mjs', 'native-turn-usage-client.mjs'].map(async name =>
   (await readFile(new URL(name, import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '').replace(/^export /gm, '')))
 consoleModules[0] = `const {consoleRemoteContribution}=(()=>{${consoleModules[0]}\nreturn {consoleRemoteContribution};})();`
 let client = await readFile(new URL('./client.mjs', import.meta.url), 'utf8')
 const imports = client.match(/^import .*$/gm) ?? []
-if (imports.length !== 16) throw new Error('Update the explicit client build when its imports change')
+if (imports.length !== 17) throw new Error('Update the explicit client build when its imports change')
 client = client.replace(/^import .*\r?\n/gm, '').replace(/^export /gm, '')
 const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
 const packageId = pkg.name || 'dsh-host'

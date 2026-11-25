@@ -14,6 +14,7 @@ import { DelegationPicker, installDelegationSource, delegationCss } from './dele
 import { DELEGATION_SOURCE, delegationReference } from './delegation-mentions.mjs'
 import { installNativeRepliesClient } from './native-replies-client.mjs'
 import { installNativeCompactionClient } from './native-compaction-client.mjs'
+import { installNativeTurnUsageClient, nativeTurnUsageCss } from './native-turn-usage-client.mjs'
 
 const NS = 'codexhost'
 const AGENTS = [{ id: 'codex', label: 'Codex' }, { id: 'claude-code', label: 'Claude Code' }, { id: 'antigravity', label: 'Antigravity' }, { id: 'deepseek-harness', label: 'DSH' }]
@@ -62,7 +63,7 @@ export async function apply(ctx) {
   installConsoleClient(ctx, t)
   ctx.effect(() => {
     const style = document.createElement('style')
-    style.textContent = css + nativeContextCss + dshConsoleCss + delegationCss + nativeModelCss
+    style.textContent = css + nativeContextCss + dshConsoleCss + delegationCss + nativeModelCss + nativeTurnUsageCss
     document.head.append(style)
     return () => style.remove()
   })
@@ -149,6 +150,7 @@ export async function apply(ctx) {
   ctx.inject(['uiSession', 'uiConversation', 'remote.session', 'sidebarRight', 'fileDrag'], scope => {
     scope.effect(() => installNativeRepliesClient(scope), 'codexhost: native reply display')
     scope.effect(() => installNativeCompactionClient(scope), 'codexhost: native compaction display')
+    scope.effect(() => installNativeTurnUsageClient(scope), 'codexhost: native turn usage display')
     scope.slots.inject('tool.call.toolview', () => scope.effect(() => {
       const aliases = { Read: 'read', Write: 'write', Edit: 'edit', Grep: 'grep', Glob: 'glob', Bash: 'bash', PowerShell: 'pwsh', exec_command: 'pwsh', fileChange: 'edit' }
       const disposers = []
