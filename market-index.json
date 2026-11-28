@@ -71,6 +71,18 @@
       },
       "versions": [
         {
+          "version": "0.6.9",
+          "publishTimestamp": 1795839531,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/jayujie/dsh-host",
+            "commit": "db2f237a488dd3a92bd4a7a030c80ecd9b9d2a0e"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.5 <0.3.0-0"
+          }
+        },
+        {
           "version": "0.6.8",
           "publishTimestamp": 1795608122,
           "source": {
