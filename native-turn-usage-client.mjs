@@ -25,11 +25,11 @@ function chTurnUsageSafeSum(values) {
   return total
 }
 
+// Literal copy of external-engines.mjs (build-client.mjs strips imports). codexhost-* ids are read-only:
+// Sessions created before 2026-11-27 recorded them; new Sessions use dsh-host-*.
+const CH_TURN_USAGE_PRESETS = { 'dsh-host-codex': 'codex', 'dsh-host-claude-code': 'claude-code', 'dsh-host-antigravity': 'antigravity', 'codexhost-codex': 'codex', 'codexhost-claude-code': 'claude-code', 'codexhost-antigravity': 'antigravity' }
 function chTurnUsageExternalOwner(preset) {
-  if (preset === 'codexhost-codex') return 'codex'
-  if (preset === 'codexhost-claude-code') return 'claude-code'
-  if (preset === 'codexhost-antigravity') return 'antigravity'
-  return null
+  return typeof preset === 'string' && Object.hasOwn(CH_TURN_USAGE_PRESETS, preset) ? CH_TURN_USAGE_PRESETS[preset] : null
 }
 
 export function normalizeExternalTurnUsage(usage, route) {
@@ -104,7 +104,7 @@ export function resolveExternalTurnRoute(owner, identity, observation) {
       : undefined
   if (typeof rawModel !== 'string') return undefined
   const model = rawModel.trim()
-  return model ? { provider: `codexhost/${owner}`, model } : undefined
+  return model ? { provider: `dsh-host/${owner}`, model } : undefined
 }
 
 function chTurnUsageFormatTokens(value, t) {
@@ -185,8 +185,8 @@ function chTurnUsageExactCount(value, t) {
 
 function ExternalTurnUsageAction({ messageId, useChat, useProjection, performanceUsage, t }) {
   const preset = useProjection('agentPreset')
-  const identity = useProjection('codexHostModelIdentity')
-  const observation = useProjection('codexHostObservation')
+  const identity = useProjection('dshHostModelIdentity')
+  const observation = useProjection('dshHostObservation')
   const store = performanceUsage ?? CH_TURN_USAGE_DEFAULT_PERFORMANCE
   const mode = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const rawUsage = useChat(snapshot => findExternalTurnRawUsage(snapshot, messageId))
@@ -268,7 +268,7 @@ function ExternalTurnUsageAction({ messageId, useChat, useProjection, performanc
   return h('span', {
     ref: rootRef,
     className: 'ch-turn-usage',
-    'data-codexhost-turn-usage': '',
+    'data-dsh-host-turn-usage': '',
     style: { anchorName },
   },
   h('button', {
@@ -288,7 +288,7 @@ function ExternalTurnUsageAction({ messageId, useChat, useProjection, performanc
 export function installNativeTurnUsageClient(scope) {
   return scope.slots.inject('conversation.chat.assistant-actions', () => scope.slots.register({
     name: 'conversation.chat.assistant-actions',
-    id: 'codexhost-turn-usage',
+    id: 'dsh-host-turn-usage',
     order: 900,
     locale: 'chat',
     inject: sessionId => {
@@ -304,7 +304,7 @@ export function installNativeTurnUsageClient(scope) {
 }
 
 export const nativeTurnUsageCss = `
-[data-clock="end"]:has([data-codexhost-turn-usage]) > :last-child { order: 2; margin-left: 0; }
+[data-clock="end"]:has([data-dsh-host-turn-usage]) > :last-child { order: 2; margin-left: 0; }
 .ch-turn-usage { display: inline-flex; min-width: 0; order: 1; margin-left: 8px; }
 .ch-turn-usage-trigger {
   display: inline-flex; align-items: center; gap: 4px; min-width: 0;

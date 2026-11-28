@@ -11,7 +11,7 @@ export const DSH_AGY_MAX_TRAJECTORY_BYTES = 16 * 1024 * 1024;
 export const DSH_AGY_CATALOG_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DSH_AGY_GEMINI_CONTEXT_WINDOW_TOKENS = 516_000;
 export const DSH_AGY_AUTO_COMPACT_RATIO = 0.8;
-const DSH_AGY_CATALOG_CACHE_VERSION = 2;
+const DSH_AGY_CATALOG_CACHE_VERSION = 3;
 const DSH_AGY_TRIMMED_COMMAND_OUTPUT = '[older command output trimmed]';
 const DSH_AGY_TRIMMED_TOOL_OUTPUT = '[older tool output trimmed]';
 const DSH_AGY_TRIMMED_DIFF = '[older diff trimmed]';
@@ -46,7 +46,73 @@ export function dshShouldAutoCompactAntigravity(usedTokens, windowTokens, lastCo
 export function dshIsTransientAntigravityError(message) {
   if (typeof message !== 'string' || !message.trim()) return false;
   if (/User location is not supported|Individual quota reached|quota exhausted|authentication|sign[ -]?in|login|permission denied|invalid[_ ]request|400\b|401\b|403\b/iu.test(message)) return false;
-  return /\b(?:429|502|503|504|529)\b|overloaded|temporarily unavailable|service unavailable|bad gateway|gateway timeout|econnreset|etimedout|econnrefused|epipe|socket hang up|tls|fetch failed|UNAVAILABLE|DEADLINE_EXCEEDED/iu.test(message);
+  return /\b(?:429|502|503|504|529)\b|overloaded|temporarily unavailable|service unavailable|bad gateway|gateway timeout|econnreset|etimedout|econnrefused|epipe|socket hang up|tls|fetch failed|UNAVAILABLE|DEADLINE_EXCEEDED|unexpected eof|:\s*eof\b/iu.test(message);
+}
+
+export const DSH_AGY_PRETURN_RETRY_DELAYS_MS = [30_000, 30_000, 30_000];
+
+/**
+ * Parse pre-turn retry backoff delays (ms). Defaults to [30000, 30000, 30000].
+ * Set DSH_AGY_PRETURN_RETRY_DELAYS_MS="0" or "off" to disable retries.
+ */
+export function dshAntigravityPreTurnRetryDelays(environment = process.env) {
+  const raw = environment?.DSH_AGY_PRETURN_RETRY_DELAYS_MS;
+  if (typeof raw !== 'string' || !raw.trim()) return DSH_AGY_PRETURN_RETRY_DELAYS_MS;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === '0' || trimmed === 'off' || trimmed === 'false' || trimmed === 'none') return [];
+  const parsed = trimmed
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((ms) => Number.isFinite(ms) && ms >= 0 && ms <= 60_000);
+  return parsed.length > 0 ? parsed : DSH_AGY_PRETURN_RETRY_DELAYS_MS;
+}
+
+/**
+ * Narrow classifier for zero-side-effect pre-turn Antigravity failures (such as
+ * proxy EOF during OAuth userinfo eligibility check or OAuth token refresh)
+ * safe to retry automatically.
+ */
+export function dshIsPreTurnRetryableAntigravityError(message) {
+  if (typeof message !== 'string' || !message.trim()) return false;
+  // Location 400s are intermittent behind proxies (exit IP briefly lands in an
+  // unsupported region); the caller only retries when no side effects exist.
+  if (/User location is not supported/iu.test(message)) return true;
+  if (/Individual quota reached|quota exhausted|You are not logged into|invalid_grant|authentication failed|unauthorized|forbidden|permission denied|invalid[_ ]request|\b(?:400|401|403)\b/iu.test(message)) {
+    return false;
+  }
+  return /(?:(?:OAuth\s+)?token\s+(?:refresh|validation)\s+failed\s+due\s+to\s+network\s+error)|(?:Eligibility check failed[\s\S]*?(?:unexpected eof|:\s*eof\b|econnreset|etimedout|econnrefused|epipe|socket hang up|connection reset|connection closed|broken pipe|tls|context deadline exceeded))|(?:unexpected eof|:\s*eof\b|econnreset|etimedout|econnrefused|epipe|socket hang up|connection reset|bad record mac|tls:|DEADLINE_EXCEEDED|UNAVAILABLE|\b(?:502|503|504)\b)/iu.test(message);
+}
+
+/**
+ * Resolve a collision-free nativeTurnKey for an Antigravity result event.
+ *
+ * - Failed/cancelled turns that never advanced native num_turns (num_turns <= 0
+ *   or duplicating an already-recorded nativeTurnKey) return null so the adapter
+ *   omits nativeTurnRef; otherwise MappingStore throws MAPPING_CONFLICT and
+ *   latches thread.persistenceError, masking the real error and bricking the thread.
+ * - Succeeded turns must always receive a unique positive nativeTurnKey.
+ */
+export function dshResolveAntigravityTurnKey({ numTurns, existingKeys, willSucceed }) {
+  const used = existingKeys instanceof Set ? existingKeys : new Set(existingKeys ?? []);
+  const hasPositiveTurn = typeof numTurns === 'number' && Number.isSafeInteger(numTurns) && numTurns > 0;
+  const candidate = hasPositiveTurn ? `turn:${numTurns}` : null;
+
+  if (!willSucceed) {
+    if (candidate && !used.has(candidate)) return candidate;
+    return null;
+  }
+
+  if (candidate && !used.has(candidate)) return candidate;
+  let next = used.size + 1;
+  for (const key of used) {
+    const match = /^turn:(\d+)$/u.exec(key);
+    if (match) {
+      const n = Number(match[1]);
+      if (Number.isSafeInteger(n) && n >= next) next = n + 1;
+    }
+  }
+  while (used.has(`turn:${next}`)) next += 1;
+  return `turn:${next}`;
 }
 
 export function dshNormalizeAntigravityModelForPrice(model) {

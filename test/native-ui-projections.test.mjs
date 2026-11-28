@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { externalProjection, hostCostLabel, hostModelPresentation } from '../native-ui-projections.mjs'
+import { externalProjection, externalContextBreakdown, hostCostLabel, hostModelPresentation } from '../native-ui-projections.mjs'
 import { observedCost } from '../native-observations.mjs'
 
 test('Claude model refs are selections, never fabricated resolved models', () => {
@@ -42,4 +42,45 @@ test('Host price is reused verbatim, with original formatting and unpriced lower
   assert.equal(hostCostLabel({ totalCostUsd: .12345 }, { source: 'native' }), '$0.123')
   assert.equal(hostCostLabel({}), undefined)
   assert.equal(observedCost({ totalCostUsd: 0 }), undefined)
+})
+
+test('externalContextBreakdown reconciles tool and message tokens against measured contextUsedTokens (Scheme A)', () => {
+  const obs = { recordedSeq: 100, usage: { contextUsedTokens: 180_000, contextWindowTokens: 516_000 } }
+  // Within system ceiling: exact residual goes to systemTokens.
+  const within = { recordedSeq: 100, usage: { contextUsedTokens: 85_000, contextWindowTokens: 516_000 } }
+  assert.deepEqual(externalContextBreakdown(within, { toolTokens: 48_000, messageTokens: 15_000 }), {
+    systemTokens: 22_000, toolsTokens: 48_000, messageTokens: 15_000,
+  })
+  // Large unmirrored gap (e.g. truncated tool outputs) must not bloat systemTokens; excess goes to toolsTokens.
+  assert.deepEqual(externalContextBreakdown(obs, { toolTokens: 48_000, messageTokens: 15_000, systemBaselineTokens: 20_000 }), {
+    systemTokens: 20_000, toolsTokens: 145_000, messageTokens: 15_000,
+  })
+  assert.deepEqual(externalProjection('contextBreakdown', { systemTokens: 1 }, obs, { toolTokens: 48_000, messageTokens: 15_000, systemBaselineTokens: 20_000 }), {
+    systemTokens: 20_000, toolsTokens: 145_000, messageTokens: 15_000,
+  })
+  // Stale pre-compaction observation (lastCompactionSeq > recordedSeq) must not attribute pre-compaction 521K to systemTokens.
+  const stalePreCompact = { recordedSeq: 15164, usage: { contextUsedTokens: 520_893, contextWindowTokens: 516_000 } }
+  const postCompactActivity = { toolTokens: 17_300, messageTokens: 18_700, lastCompactionSeq: 15171, systemBaselineTokens: 18_000 }
+  assert.deepEqual(externalContextBreakdown(stalePreCompact, postCompactActivity), {
+    systemTokens: 18_000, toolsTokens: 17_300, messageTokens: 18_700,
+  })
+  assert.deepEqual(externalProjection('contextPressure', undefined, stalePreCompact, postCompactActivity), {
+    pressureTokens: 54_000, contextWindow: 516_000,
+  })
+  // Immediately after compaction starts (zero active tokens yet), never fall back to pre-compaction 521K.
+  assert.deepEqual(externalProjection('contextPressure', undefined, stalePreCompact, { toolTokens: 0, messageTokens: 0, lastCompactionSeq: 15171, systemBaselineTokens: 18_000 }), {
+    pressureTokens: 18_000, contextWindow: 516_000,
+  })
+  // Once compaction records exact afterTokens (20096), contextPressure reflects it immediately even before a fresh observation.
+  assert.deepEqual(externalProjection('contextPressure', undefined, stalePreCompact, { toolTokens: 0, messageTokens: 3_300, lastCompactionSeq: 15172, lastCompactionAfterTokens: 20_096 }), {
+    pressureTokens: 20_096, contextWindow: 516_000,
+  })
+  // When heuristic sum exceeds measured contextUsed (e.g. engine pruned tool outputs), scale proportionally.
+  const scaled = externalContextBreakdown(obs, { toolTokens: 300_000, messageTokens: 100_000 })
+  assert.equal(scaled.systemTokens, 0)
+  assert.equal(scaled.toolsTokens + scaled.messageTokens, 180_000)
+  assert.equal(scaled.toolsTokens, 135_000)
+  assert.equal(scaled.messageTokens, 45_000)
+  // Zero activity never invents a 100% system breakdown.
+  assert.equal(externalContextBreakdown(obs, { toolTokens: 0, messageTokens: 0 }), undefined)
 })

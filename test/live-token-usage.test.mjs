@@ -229,3 +229,57 @@ for (const harness of ['claude-code', 'antigravity']) test(`${harness} late zero
     await new Promise(resolve => setImmediate(resolve))
   } finally { releaseBackgroundObserve?.(); await driver.dispose() }
 })
+
+test('aborted turn without turn/completed computes elapsed speed when output increased and keeps previous speed when zero output', { timeout: 5000 }, async () => {
+  const events = [], frames = [], listeners = new Set()
+  let number = 0, currentUsage = { ...ZERO_USAGE }
+  const session = { id: 'local', header: { cwd: 'D:/fixture' }, snapshotEvents: () => events, append(type, data) {
+    const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }
+    events.push(event); return event
+  } }
+  session.append('plugin:codexhost/configuration', { harnessId: 'codex', modelId: 'test' })
+  const helpers = {
+    appendPluginRecord: (s, type, data) => s.append(type, data), createAssistantMessage: x => x,
+    agentEvents: () => ({ emit: (_type, value) => frames.push(value.frame) }),
+    AssistantStreamAccumulator: class { rows = []; push(value) { this.rows.push(value); return value } snapshot() { return this.rows } },
+    BlockAssembler: class { push() {} blocks() { return [{ type: 'text', text: 'partial' }] } },
+  }
+  const ctx = { get() {}, agentPresets: { presetForSession: () => 'codexhost-codex' }, sessionPersistence: { async flush() {} } }
+  const observationOf = () => events.filter(e => e.type === 'plugin:codexhost/observation-v2').at(-1)?.data
+  const peer = { closed: new Promise(() => {}), close() {}, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, async request(method) {
+    if (method === 'model/list') return { data: [{ model: 'test', isDefault: true }] }
+    if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread' } }
+    if (method === 'thread/read') return { thread: { id: 'thread', status: { type: 'idle' } } }
+    if (method === 'codexhost/thread/usage/inspect') return { usage: { ...currentUsage } }
+    if (method === 'turn/interrupt') return {}
+    if (method === 'turn/start') {
+      const id = 'turn-' + ++number
+      if (number === 1) {
+        currentUsage = { ...totals }
+        setTimeout(() => {
+          for (const send of listeners) send(dshHostTokenUsageNotification('thread', id, currentUsage))
+        }, 15)
+      }
+      return { turn: { id } }
+    }
+    throw new Error(method)
+  } }
+  const driver = new NativeSessionDriver(ctx, helpers, { connect: async () => peer, turnTimeoutMs: 2000, cancelTimeoutMs: 60, observationOf })
+  const agent = { id: 'local', session }
+  try {
+    const abort1 = new AbortController()
+    setTimeout(() => abort1.abort(), 30)
+    await assert.rejects(driver.run({ agent, messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'turn 1' }] }], turn: 1, step: 1, signal: abort1.signal }))
+    await new Promise(resolve => setTimeout(resolve, 25))
+    const obs1 = observationOf()
+    assert.ok(obs1?.usage?.turnAverageTokensPerSecond > 0, `expected positive speed on aborted turn with output, got ${obs1?.usage?.turnAverageTokensPerSecond}`)
+
+    session.append('plugin:codexhost/thread', { version: 1, phase: 'ready', harnessId: 'codex', threadId: 'thread', sessionId: 'local', appliedConfiguration: { modelId: 'test', permissionModeId: 'full-access' } })
+    const abort2 = new AbortController()
+    setTimeout(() => abort2.abort(), 20)
+    await assert.rejects(driver.run({ agent, messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'turn 2' }] }], turn: 2, step: 1, signal: abort2.signal }))
+    await new Promise(resolve => setTimeout(resolve, 25))
+    const obs2 = observationOf()
+    assert.equal(obs2?.usage?.turnAverageTokensPerSecond, obs1.usage.turnAverageTokensPerSecond)
+  } finally { await driver.dispose() }
+})

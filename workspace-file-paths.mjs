@@ -24,5 +24,5 @@ export function installWorkspaceFilePaths(ctx) {
         else delete service[name]
       }
     }
-  }, 'codexhost: Windows file destinations'))
+  }, 'dsh-host: Windows file destinations'))
 }

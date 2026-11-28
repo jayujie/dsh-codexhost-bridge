@@ -17,7 +17,7 @@ export class RuntimeClientError extends Error {
   }
 }
 
-export class CodexHostRuntimeClient {
+export class DshHostRuntimeClient {
   #endpoint
   #token
   #fetch
@@ -55,16 +55,16 @@ export class CodexHostRuntimeClient {
       return this.#requestCli(path, body)
     }
     if (!this.configured()) {
-      throw new RuntimeClientError('runtime_not_configured', 'CodexHost Runtime endpoint and token are not configured', 503)
+      throw new RuntimeClientError('runtime_not_configured', 'DSH Host Runtime endpoint and token are not configured', 503)
     }
     let url
     try {
       url = new URL(path, this.#endpoint)
     } catch {
-      throw new RuntimeClientError('runtime_endpoint_invalid', 'CodexHost Runtime endpoint is invalid', 503)
+      throw new RuntimeClientError('runtime_endpoint_invalid', 'DSH Host Runtime endpoint is invalid', 503)
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new RuntimeClientError('runtime_endpoint_invalid', 'CodexHost Runtime endpoint must use HTTP or HTTPS', 503)
+      throw new RuntimeClientError('runtime_endpoint_invalid', 'DSH Host Runtime endpoint must use HTTP or HTTPS', 503)
     }
     let response
     try {
@@ -75,16 +75,16 @@ export class CodexHostRuntimeClient {
         redirect: 'error',
       })
     } catch (error) {
-      throw new RuntimeClientError('runtime_unreachable', 'CodexHost Runtime could not be reached', 502)
+      throw new RuntimeClientError('runtime_unreachable', 'DSH Host Runtime could not be reached', 502)
     }
     let payload
     try {
       payload = await response.json()
     } catch {
-      throw new RuntimeClientError('runtime_invalid_response', `CodexHost Runtime returned invalid JSON (HTTP ${response.status})`, 502)
+      throw new RuntimeClientError('runtime_invalid_response', `DSH Host Runtime returned invalid JSON (HTTP ${response.status})`, 502)
     }
     if (!response.ok || payload?.error) {
-      const message = typeof payload?.error?.message === 'string' ? payload.error.message : 'CodexHost Runtime request failed'
+      const message = typeof payload?.error?.message === 'string' ? payload.error.message : 'DSH Host Runtime request failed'
       throw new RuntimeClientError(typeof payload?.error?.code === 'string' ? payload.error.code : 'runtime_error', message, response.status)
     }
     return payload
@@ -92,7 +92,7 @@ export class CodexHostRuntimeClient {
 
   async #requestCli(route, body = {}) {
     if (this.#cliScript === undefined || !(await fileExists(this.#cliScript))) {
-      throw new RuntimeClientError('runtime_not_configured', 'CodexHost CLI script is not available', 503)
+      throw new RuntimeClientError('runtime_not_configured', 'DSH Host CLI script is not available', 503)
     }
     const args = cliArguments(route, body)
     const environment = {
@@ -113,14 +113,14 @@ export class CodexHostRuntimeClient {
         maxBuffer: 4 * 1024 * 1024,
       })
       try { return JSON.parse(result.stdout) } catch {
-        throw new RuntimeClientError('runtime_invalid_response', 'CodexHost CLI returned invalid JSON', 502)
+        throw new RuntimeClientError('runtime_invalid_response', 'DSH Host CLI returned invalid JSON', 502)
       }
     } catch (error) {
       if (error instanceof RuntimeClientError) throw error
       let payload
       try { payload = JSON.parse(error?.stderr ?? '') } catch { payload = undefined }
       const code = typeof payload?.error?.code === 'string' ? payload.error.code : 'runtime_unreachable'
-      const message = typeof payload?.error?.message === 'string' ? payload.error.message : 'CodexHost CLI request failed'
+      const message = typeof payload?.error?.message === 'string' ? payload.error.message : 'DSH Host CLI request failed'
       throw new RuntimeClientError(code, message, 502)
     }
   }
@@ -231,6 +231,6 @@ export function cliArguments(route, body) {
     case '/v1/thread/read': return ['thread', 'read', body.threadId, '--view', body.view ?? 'messages', ...(body.cursor ? ['--cursor', body.cursor] : []), ...(body.limit ? ['--limit', String(body.limit)] : [])]
     case '/v1/thread/send': return ['thread', 'send', body.threadId, '--message', body.message]
     case '/v1/delegate/start': return ['delegate', 'start', '--harness', body.harnessId, '--task', body.task, '--cwd', body.cwd ?? process.cwd(), ...(body.parentThreadId ? ['--parent-thread', body.parentThreadId] : []), ...(body.taskName ? ['--task-name', body.taskName] : []), ...(body.watch === undefined ? [] : ['--watch', String(body.watch)])]
-    default: throw new RuntimeClientError('unsupported_operation', `Unsupported CodexHost CLI route: ${route}`, 400)
+    default: throw new RuntimeClientError('unsupported_operation', `Unsupported DSH Host CLI route: ${route}`, 400)
   }
 }

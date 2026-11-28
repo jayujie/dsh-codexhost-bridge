@@ -7,7 +7,7 @@ export function dshPresetView(source) {
       const value = source.getSnapshot()
       if (value !== previous) {
         previous = value
-        filtered = { ...value, options: value.options.filter(option => !['codexhost-codex', 'codexhost-claude-code', 'codexhost-antigravity'].includes(option.id)) }
+        filtered = { ...value, options: value.options.filter(option => !['dsh-host-codex', 'dsh-host-claude-code', 'dsh-host-antigravity', 'codexhost-codex', 'codexhost-claude-code', 'codexhost-antigravity'].includes(option.id)) }
       }
       return filtered
     },

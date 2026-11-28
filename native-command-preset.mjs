@@ -10,9 +10,9 @@ export function apply(ctx) {
     input: { hint: name === 'compact' ? '可选：需要保留的内容' : '完成条件；留空查看；clear 清除' },
     handler({ agent, rawInput, signal }) {
       signal.throwIfAborted()
-      const driver = ctx.get('codexHostNative')
+      const driver = ctx.get('dshHostNative')
       if (!driver?.available()) return { kind: 'error', text: 'Host 命令驱动不可用，未发送任务' }
       return driver.submitCommand(agent, name, rawInput, signal)
     },
-  }), `codexhost: native /${name}`)
+  }), `dsh-host: native /${name}`)
 }

@@ -124,7 +124,7 @@ export class NativeBackgroundJobs {
           return { cancel: reason => this.#cancel(entry, reason), done }
         } })
     } catch (error) {
-      this.#ctx.logger?.warn?.(`CodexHost background job unavailable: ${error.message}`)
+      this.#ctx.logger?.warn?.(`DSH Host background job unavailable: ${error.message}`)
       return { error: error.message }
     }
     this.#entries.set(spec.id, entry)
@@ -169,7 +169,7 @@ export class NativeBackgroundJobs {
       const text = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : typeof item.output === 'string' ? item.output : undefined
       if (!entry.appended && text) entry.handle.append(text)
       this.#settle(entry, commandOutcome(item, params.outcome))
-    } catch (error) { this.#ctx.logger?.warn?.(`CodexHost background job update failed: ${error.message}`) }
+    } catch (error) { this.#ctx.logger?.warn?.(`DSH Host background job update failed: ${error.message}`) }
   }
 
   #applyAgentState(entry, state) {

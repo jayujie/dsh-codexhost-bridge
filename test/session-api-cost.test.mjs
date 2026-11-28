@@ -58,6 +58,11 @@ test('recorded Astra Host Turn prices once without an observation or intermediat
   const request = costRequest(host)
   const view = sessionCostView({ [request.id]: request }, prices)
   assert.ok(Math.abs(view.usage.totalCostUsd - .2179056) < 1e-12)
+  assert.ok(Math.abs(view.usage.inputCostUsd - (21756 * 8 / 1e6)) < 1e-12)
+  assert.ok(Math.abs(view.usage.cacheReadCostUsd - (47744 * .4 / 1e6)) < 1e-12)
+  assert.ok(Math.abs(view.usage.outputCostUsd - (619 * 40 / 1e6)) < 1e-12)
+  assert.ok(Math.abs(view.usage.cacheSavingsUsd - (47744 * (8 - .4) / 1e6)) < 1e-12)
+  assert.ok(Math.abs(view.usage.sessionCacheHitRatePercent - (47744 / (21756 + 47744) * 100)) < 1e-9)
   assert.equal(view.cost.unpricedRequests, 0)
 })
 test('57 token batched reply uses full measured turn duration, not its 6ms drain', () => {
@@ -74,4 +79,39 @@ test('timing does not manufacture counters or carry previous turn reliability to
   assert.equal(turnTimingUsage(undefined, { outputTokens: 57 }, 5000, false).turnAverageTokensPerSecond, undefined)
   const next = mergeObservedUsage({ inputTokens: 1, outputTokens: 1, totalTokens: 2, outputTimingReliable: 0 }, { inputTokens: 2, outputTokens: 2, totalTokens: 4, outputTokensPerSecond: 20 }, true)
   assert.equal(next.outputTokensPerSecond, 20)
+})
+test('zero-output turns, pre-turn inspections, and model switches retain the last valid speed', () => {
+  // Zero new output tokens must not emit 0 tok/s or mark timing unreliable.
+  assert.deepEqual(turnTimingUsage({ outputTokens: 500 }, { outputTokens: 500 }, 2000, false), {})
+  const prev = {
+    inputTokens: 1000, outputTokens: 500, totalTokens: 1500,
+    contextUsedTokens: 1200, contextWindowTokens: 400000,
+    outputTokensPerSecond: 88.5, turnAverageTokensPerSecond: 42.1, outputTimingReliable: 1,
+  }
+  // Explicit 0 speed must never overwrite previous positive speed.
+  const zeroNext = mergeObservedUsage(prev, { inputTokens: 1000, outputTokens: 500, totalTokens: 1500, turnAverageTokensPerSecond: 0 }, true, true)
+  assert.equal(zeroNext.outputTokensPerSecond, 88.5)
+  assert.equal(zeroNext.turnAverageTokensPerSecond, 42.1)
+  // Pre-turn inspect after restart/reload with advanced counters retains last valid speed.
+  const reloaded = mergeObservedUsage(prev, { inputTokens: 1400, outputTokens: 650, totalTokens: 2050 }, true, true)
+  assert.equal(reloaded.outputTokensPerSecond, 88.5)
+  assert.equal(reloaded.turnAverageTokensPerSecond, 42.1)
+  // Mid-session model switch (sameThread=true, sameRoute=false) retains last speed without carrying old model context.
+  const switched = mergeObservedUsage(prev, { inputTokens: 1000, outputTokens: 500, totalTokens: 1500, contextWindowTokens: 512000 }, false, true)
+  assert.equal(switched.outputTokensPerSecond, 88.5)
+  assert.equal(switched.turnAverageTokensPerSecond, 42.1)
+  assert.equal(switched.contextUsedTokens, undefined)
+  assert.equal(switched.contextWindowTokens, 512000)
+  // Once the new model produces its own positive speed, it replaces the previous speed.
+  const newModelDone = mergeObservedUsage(prev, { inputTokens: 2000, outputTokens: 900, totalTokens: 2900, turnAverageTokensPerSecond: 65, outputTimingReliable: 0 }, false, true)
+  assert.equal(newModelDone.outputTokensPerSecond, undefined)
+  assert.equal(newModelDone.turnAverageTokensPerSecond, 65)
+  // Different thread never inherits speed.
+  const otherThread = mergeObservedUsage(prev, { inputTokens: 100, outputTokens: 10, totalTokens: 110 }, false, false)
+  assert.equal(otherThread.outputTokensPerSecond, undefined)
+  assert.equal(otherThread.turnAverageTokensPerSecond, undefined)
+  // A stray 0 outputTokensPerSecond falls back to positive turnAverageTokensPerSecond in sessionStats.
+  const stats = externalProjection('sessionStats', { steps: 1, turns: 1 }, { usage: { outputTokensPerSecond: 0, turnAverageTokensPerSecond: 42.1 } })
+  assert.equal(stats.decodeTokens, 42.1)
+  assert.equal(stats.decodeMs, 1000)
 })

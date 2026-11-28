@@ -20,7 +20,7 @@ test('real session sequence (seq 13429-13445) pauses, then the next turn clears 
   const failed = [
     { type: 'turn/start', seq: 13429, time: 1, data: { turn: 162 } },
     { type: 'user/message', seq: 13434, time: 2, data: { content: [] } },
-    { type: 'plugin:codexhost/turn-failure', seq: 13437, time: 3, ignorable: true, data: { turn: 162 } },
+    { type: 'plugin:dsh-host/turn-failure', seq: 13437, time: 3, ignorable: true, data: { turn: 162 } },
     { type: 'assistant/message', seq: 13440, time: 1795282247365, data: { turn: 162, step: 1, message: claude(GATEWAY) } },
     { type: 'step/end', seq: 13441, time: 5, data: { turn: 162 } },
     { type: 'turn/end', seq: 13442, time: 6, data: { turn: 162, reason: { kind: 'error', error: { message: 'Claude Code Turn failed' } } } },
@@ -105,7 +105,7 @@ test('fires once at reset + 2 minutes, only while idle, and never twice for the 
 test('respects the off switch, the stale guard, the streak cap and an unknown reset time', async () => {
   const sent = []
   const resume = async text => { sent.push(text) }
-  const off = mountQuota({ sessionId: 's', quota: paused, running: false, pending: 0, resume, t }, { now: RESET + 3600e3, storage: new Map([['codexhost.quotaResume.enabled', 'off']]) })
+  const off = mountQuota({ sessionId: 's', quota: paused, running: false, pending: 0, resume, t }, { now: RESET + 3600e3, storage: new Map([['dsh-host.quotaResume.enabled', 'off']]) })
   assert.match(off.text(), /quotaChip_off/)
   mountQuota({ sessionId: 's', quota: paused, running: false, pending: 0, resume, t }, { now: RESET + 7 * 3600e3 })
   mountQuota({ sessionId: 's', quota: { ...paused, streak: 4 }, running: false, pending: 0, resume, t }, { now: RESET + 3600e3 })

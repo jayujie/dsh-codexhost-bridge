@@ -35,7 +35,7 @@ test('Codex keeps native policies and shares the DSH permission artwork roles', 
 })
 
 const source = (await readFile(new URL('../client.mjs', import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '').replace(/^export /gm, '')
-function fixture(agentId = 'claude-code', permissionModeId = 'plan', running = false) {
+function fixture(agentId = 'claude-code', permissionModeId = 'plan', running = false, locked = false) {
   const stored = [], calls = []
   let cursor = 0
   const icons = { PermissionIconReadOnlyRegular: function DshReadOnly() {}, PermissionIconWorkspaceWriteRegular: function DshWorkspaceWrite() {}, PermissionIconFullAccessRegular: function DshFullAccess() {}, IconChevronDownOutlineRegular: function DshChevron() {} }
@@ -49,7 +49,7 @@ function fixture(agentId = 'claude-code', permissionModeId = 'plan', running = f
   }
   const api = vm.runInNewContext(source + '\n;({HostPermission,Picker,zh})', bindings)
   const directory = { subscribe() {}, getSnapshot: () => state, configure: async value => calls.push(value) }
-  const render = () => { cursor = 0; return api.HostPermission({ sessionId: 'one', hostDirectory: directory, useSessions: fn => fn({ byId: { one: { running } } }), hostT: key => api.zh[key] ?? key }) }
+  const render = () => { cursor = 0; return api.HostPermission({ sessionId: 'one', hostDirectory: directory, locked, useSessions: fn => fn({ byId: { one: { running } } }), hostT: key => api.zh[key] ?? key }) }
   const menu = () => render().children[0]
   const risk = () => render().children[1]
   return { menu, risk, calls, icons, api, state, render }
@@ -97,8 +97,17 @@ for (const [agent, target] of [['claude-code', 'bypassPermissions'], ['codex', '
   })
 }
 
-test('running conversations cannot change permissions through a stale selection callback', async () => {
-  const f = fixture('claude-code', 'plan', true)
+test('running conversations can queue permission changes for the next turn when composer is not locked', async () => {
+  const f = fixture('claude-code', 'plan', true, false)
+  assert.equal(f.menu().props.disabled, false)
+  await f.menu().props.onSelect('acceptEdits')
+  assert.deepEqual(f.calls.map(value => value.permissionModeId), ['acceptEdits'])
+  await f.menu().props.onSelect('bypassPermissions')
+  assert.ok(f.risk())
+})
+
+test('locked conversations cannot change permissions through a stale selection callback', async () => {
+  const f = fixture('claude-code', 'plan', false, true)
   assert.equal(f.menu().props.disabled, true)
   await f.menu().props.onSelect('acceptEdits'); await f.menu().props.onSelect('bypassPermissions')
   assert.equal(f.calls.length, 0); assert.equal(f.risk(), null)

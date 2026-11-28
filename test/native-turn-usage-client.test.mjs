@@ -78,7 +78,7 @@ async function loadTurnUsageAction(performanceStore) {
         locale: ctx.locale,
         remoteAccess: ctx.remoteAccess,
         layout: {},
-        remote: { codexHost: {}, codexHostConsole: {} },
+        remote: { dshHost: {}, dshHostConsole: {} },
       })
     },
     locale: { register() {}, bind: () => key => key },
@@ -104,8 +104,8 @@ async function loadTurnUsageAction(performanceStore) {
     },
   }
   await module.apply(ctx)
-  const entry = registrations.find(item => item.spec.name === 'conversation.chat.assistant-actions' && item.spec.id === 'codexhost-turn-usage')
-  assert.ok(entry, 'codexhost-turn-usage must register in conversation.chat.assistant-actions')
+  const entry = registrations.find(item => item.spec.name === 'conversation.chat.assistant-actions' && item.spec.id === 'dsh-host-turn-usage')
+  assert.ok(entry, 'dsh-host-turn-usage must register in conversation.chat.assistant-actions')
   assert.equal(entry.spec.locale, 'chat')
   const injected = entry.spec.inject('session-1')
   const render = (props, { open = false } = {}) => {
@@ -181,9 +181,9 @@ test('external multi-tool turn displays TurnUsage pill and exact details dialog 
   ])
 
   const projections = {
-    agentPreset: 'codexhost-antigravity',
-    codexHostModelIdentity: { harnessId: 'antigravity', model: 'claude-opus-4-6-thinking' },
-    codexHostObservation: null,
+    agentPreset: 'dsh-host-antigravity',
+    dshHostModelIdentity: { harnessId: 'antigravity', model: 'claude-opus-4-6-thinking' },
+    dshHostObservation: null,
   }
   const baseProps = {
     messageId: 'msg-30',
@@ -195,7 +195,7 @@ test('external multi-tool turn displays TurnUsage pill and exact details dialog 
   // Closed pill shows compact total matching DSH native format.
   const closed = render(baseProps, { open: false })
   assert.ok(closed, 'Expected turn usage pill for multi-tool external turn')
-  assert.equal(closed[1]['data-codexhost-turn-usage'], '')
+  assert.equal(closed[1]['data-dsh-host-turn-usage'], '')
   assert.equal(flattenText(closed), '用量 5.1M tok')
   const trigger = findNode(closed, node => node[0] === 'button')
   assert.equal(trigger[1]['aria-expanded'], false)
@@ -209,7 +209,7 @@ test('external multi-tool turn displays TurnUsage pill and exact details dialog 
   const dialogText = flattenText(dialog)
   assert.match(dialogText, /本轮用量/)
   assert.match(dialogText, /5,109,239 tok/)
-  assert.match(dialogText, /codexhost\/antigravity\/claude-opus-4-6-thinking/)
+  assert.match(dialogText, /dsh-host\/antigravity\/claude-opus-4-6-thinking/)
   assert.match(dialogText, /98\.9%/)
   assert.match(dialogText, /56,542 tok/)
   assert.match(dialogText, /5,042,693 tok/)
@@ -241,7 +241,7 @@ test('does not duplicate when native tokenUsage is already present and never ren
   assert.equal(render({
     messageId: 'msg-1',
     useChat: selector => selector(nativeCovered),
-    useProjection: key => key === 'agentPreset' ? 'codexhost-codex' : null,
+    useProjection: key => key === 'agentPreset' ? 'dsh-host-codex' : null,
     t: tChat,
   }), null)
 
@@ -280,13 +280,13 @@ test('falls back to same-turn assistant-step usage, rejects invalid usage, and p
   const opened = render({
     messageId: 'msg-5',
     useChat: selector => selector(fallbackSnap),
-    useProjection: key => key === 'agentPreset' ? 'codexhost-claude-code' : key === 'codexHostObservation' ? { harnessId: 'claude-code', model: 'claude-sonnet-4-6' } : null,
+    useProjection: key => key === 'agentPreset' ? 'dsh-host-claude-code' : key === 'dshHostObservation' ? { harnessId: 'claude-code', model: 'claude-sonnet-4-6' } : null,
     t: tChat,
   }, { open: true })
   assert.ok(opened)
   const text = flattenText(opened)
   assert.match(text, /99\.96%/)
-  assert.match(text, /codexhost\/claude-code\/claude-sonnet-4-6/)
+  assert.match(text, /dsh-host\/claude-code\/claude-sonnet-4-6/)
 
   // Invalid usage shapes return null cleanly.
   for (const bad of [
@@ -300,7 +300,7 @@ test('falls back to same-turn assistant-step usage, rejects invalid usage, and p
     assert.equal(render({
       messageId: 'msg-bad',
       useChat: selector => selector(snap),
-      useProjection: key => key === 'agentPreset' ? 'codexhost-codex' : null,
+      useProjection: key => key === 'agentPreset' ? 'dsh-host-codex' : null,
       t: tChat,
     }), null)
   }

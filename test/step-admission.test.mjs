@@ -6,7 +6,7 @@ import { apply as currentPreset } from '../native-preset-driver.mjs'
 // The retained pre-0.3.5 preset contract: it executes before returning consumed input.
 function retainedLegacyPreset(ctx) {
   ctx.on('agent/pre-step', async payload => {
-    await ctx.get('codexHostNative').run(payload)
+    await ctx.get('dshHostNative').run(payload)
     return { kind: 'enter', messages: [] }
   })
 }
@@ -25,8 +25,8 @@ function fixture({ preset = currentPreset, external = true } = {}) {
   }
   const ctx = {
     on(name, fn, options) { if (name === 'agent/pre-step') options?.prepend ? hooks.unshift(fn) : hooks.push(fn) }, effect() {},
-    get(name) { if (name === 'codexHostNative') return driver },
-    agentPresets: { presetForSession: () => external ? 'codexhost-codex' : 'research-lite' },
+    get(name) { if (name === 'dshHostNative') return driver },
+    agentPresets: { presetForSession: () => external ? 'dsh-host-codex' : 'research-lite' },
     subagents: { namesOf: () => ({ self: 'lead' }) },
     sessionPersistence: { async flush() {} },
   }

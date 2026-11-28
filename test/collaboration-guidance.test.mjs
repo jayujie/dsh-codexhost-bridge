@@ -9,7 +9,7 @@ function fixture(harness, {model = 'test'} = {}) {
   const session = { id: 'guidance-fixture', header: { cwd: 'D:/fixture' }, snapshotEvents: () => events, append(type, data) {
     const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }; events.push(event); return event
   } }
-  session.append('plugin:codexhost/configuration', {harnessId: harness, modelId: model})
+  session.append('plugin:dsh-host/configuration', {harnessId: harness, modelId: model})
   const agent = { id: session.id, session, cancel() {} }
   const handlers = new Map()
   const ctx = { on(name, fn) { handlers.set(name, fn) }, effect() {}, agents: { list: () => [agent] }, get() {}, agentPresets: { presetForSession: () => 'codexhost-' + harness }, sessionPersistence: { async flush() {} } }
@@ -49,7 +49,7 @@ function fixture(harness, {model = 'test'} = {}) {
   }
 }
 const starts = f => f.calls.filter(call => call.method === 'turn/start')
-const contextMessages = f => f.events.filter(event => event.type === 'user/message' && event.data.source.kind === 'codexhost-collaboration')
+const contextMessages = f => f.events.filter(event => event.type === 'user/message' && event.data.source.kind === 'dsh-host-collaboration')
 
 test('driver records native failure diagnostics before the framework can generalize the error', async () => {
   const f = fixture('codex'), driver = f.makeDriver()
@@ -58,7 +58,7 @@ test('driver records native failure diagnostics before the framework can general
     f.peers[0].status = 'failed'
     f.peers[0].error = {message: 'generic native message', codexErrorInfo: 'model_not_found', additionalDetails: 'do not copy'}
     await assert.rejects(driver.run(f.payload(1)), {code: 'HOST_TURN_FAILED'})
-    const failures = f.events.filter(event => event.type === 'plugin:codexhost/turn-failure')
+    const failures = f.events.filter(event => event.type === 'plugin:dsh-host/turn-failure')
     assert.equal(failures.length, 1)
     assert.deepEqual(failures[0].data.failure, {code: 'model_not_found', message: 'generic native message'})
     assert.equal(failures[0].data.turn, 1)
@@ -74,10 +74,10 @@ test('Claude metadata uses a reported resolved model label without changing its 
     f.peers[0].inspection = {owner: 'external', harnessId: 'claude-code', resolvedModelLabel: 'claude-opus-5-5'}
     await driver.run(f.payload(1))
     await driver.dispose()
-    const observations = f.events.filter(event => event.type === 'plugin:codexhost/observation-v2')
+    const observations = f.events.filter(event => event.type === 'plugin:dsh-host/observation-v2')
     assert.ok(observations.length > 0)
     assert.ok(observations.every(event => event.data.model === 'claude-opus-5-5'))
-    const mapping = f.events.filter(event => event.type === 'plugin:codexhost/thread').at(-1).data
+    const mapping = f.events.filter(event => event.type === 'plugin:dsh-host/thread').at(-1).data
     assert.equal(mapping.appliedConfiguration.modelId, ref, 'display metadata must not rewrite selection')
   } finally { await driver.dispose() }
 })

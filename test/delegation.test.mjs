@@ -25,7 +25,7 @@ test('# detection respects word starts, Unicode, issue numbers and revision span
 test('references serialize to original Host carriers, never an Agent-switch command', () => {
   for (const target of DELEGATION_AGENTS) {
     const ref = delegationReference(target.id)
-    assert.equal(ref.source, 'codexhost-agent')
+    assert.equal(ref.source, 'dsh-host-agent')
     assert.equal(ref.label, '@' + target.label)
     assert.equal(ref.clipboardText, `[@${target.label}](subagent://codexhost.${target.id})`)
   }
@@ -75,7 +75,7 @@ test('target discovery performs only read-only inspections and contains unavaila
     if (params.harnessId === 'claude-code') throw new Error('private upstream details')
     return { status: 'ready' }
   } }
-  const driver = new NativeSessionDriver({ agentPresets: { presetForSession: () => 'codexhost-codex' } }, {}, { connect: async () => peer })
+  const driver = new NativeSessionDriver({ agentPresets: { presetForSession: () => 'dsh-host-codex' } }, {}, { connect: async () => peer })
   const result = await driver.delegationTargets({ session: { header: { cwd: 'D:/work' } } })
   assert.deepEqual(result.targets.map(t => t.status), ['ready', 'unavailable', 'ready'])
   assert.ok(!calls.some(call => call.params.harnessId === 'deepseek-harness'))

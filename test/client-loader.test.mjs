@@ -43,7 +43,7 @@ test('client artifact mounts native remotes and additive Composer controls witho
     effect() {},
     inject(names, callback) {
       injections.push(names)
-      callback({ inject: ctx.inject.bind(ctx), inputTriggers: { registerSource(source) { triggerSources.add(source); return () => triggerSources.delete(source) } }, effect: fn => { const off = fn(); if (typeof off === 'function') scopedDisposers.push(off); return off }, slots: ctx.slots, sessions: ctx.sessions, uiConversation: { events: { register(definition) { replyDefinitions.push(definition); return () => {} } } }, locale: ctx.locale, remoteAccess: ctx.remoteAccess, layout: {}, remote: { codexHost: {}, codexHostConsole: {} } })
+      callback({ inject: ctx.inject.bind(ctx), inputTriggers: { registerSource(source) { triggerSources.add(source); return () => triggerSources.delete(source) } }, effect: fn => { const off = fn(); if (typeof off === 'function') scopedDisposers.push(off); return off }, slots: ctx.slots, sessions: ctx.sessions, uiConversation: { events: { register(definition) { replyDefinitions.push(definition); return () => {} } } }, locale: ctx.locale, remoteAccess: ctx.remoteAccess, layout: {}, remote: { dshHost: {}, dshHostConsole: {} } })
     },
     locale: {
       register() {},
@@ -69,23 +69,23 @@ test('client artifact mounts native remotes and additive Composer controls witho
   }
   await module.apply(ctx)
   assert.deepEqual(replyDefinitions.map(d => d.target).sort(), ['chat', 'chat', 'trajectory'])
-  assert.deepEqual(replyDefinitions.map(d => d.kind).sort(), ['codexhost-native-compaction-chat', 'codexhost-native-reply-chat', 'codexhost-native-reply-trajectory'])
+  assert.deepEqual(replyDefinitions.map(d => d.kind).sort(), ['dsh-host-native-compaction-chat', 'dsh-host-native-reply-chat', 'dsh-host-native-reply-trajectory'])
   assert.equal(dockListeners.size, 1, 'Wait for actual native entries, not just the slot declaration')
   dockReady = true
   for (const callback of dockListeners) callback()
   assert.equal(dockListeners.size, 0)
-  assert.ok(injections.some(names => names.includes('remote.codexHost') && names.includes('remote.agentPresets') && names.includes('conversation') && names.includes('uiWorkspace')))
+  assert.ok(injections.some(names => names.includes('remote.dshHost') && names.includes('remote.agentPresets') && names.includes('conversation') && names.includes('uiWorkspace')))
   const right = registrations.find(entry => entry.spec.name === 'conversation.input.right')
-  assert.equal(right.spec.id, 'codexhost-agent-controls')
+  assert.equal(right.spec.id, 'dsh-host-agent-controls')
   assert.equal(typeof right.component, 'function')
   const left = registrations.find(entry => entry.spec.name === 'conversation.input.left')
-  assert.equal(left.spec.id, 'codexhost-task-controls')
+  assert.equal(left.spec.id, 'dsh-host-task-controls')
   assert.ok(left.spec.order > 40, 'Outcome check sits to the right of the keepalive chip (order 40)')
   assert.equal(left.spec.inject('test-session').hostDirectory, right.spec.inject('test-session').hostDirectory)
   assert.equal(typeof left.spec.inject('test-session').resume, 'function')
   const controlProps = right.spec.inject('test-session')
   assert.equal(controlProps.nativeTeam.Component, nativeTeam.component, 'External model menu reuses the original Team switch and its confirmation callbacks')
-  const renderedControls = right.component({ ...controlProps, useProjection: () => 'codexhost-codex', useSession: select => select({ subagent: null }), useSessions: select => select({ byId: {} }), useInput: () => ({ occurrences: [] }), t: key => key })
+  const renderedControls = right.component({ ...controlProps, useProjection: () => 'dsh-host-codex', useSession: select => select({ subagent: null }), useSessions: select => select({ byId: {} }), useInput: () => ({ occurrences: [] }), t: key => key })
   const modelPicker = renderedControls[2]
   const renderedPicker = modelPicker[0](modelPicker[1])
   assert.equal(typeof renderedPicker[0], 'function', 'Native ModelSelect source is bundled with an effort-pane extension')
@@ -105,21 +105,21 @@ test('client artifact mounts native remotes and additive Composer controls witho
   assert.equal(renderedControls.some(node => node?.[0]?.name === 'NativeRecoveryControl'), false)
   assert.equal(registrations.find(entry => entry.spec.name === 'conversation.input.permission').spec.inject('test-session').NativePermission, nativePermission.component)
   const hero = registrations.find(entry => entry.spec.name === 'conversation.hero.agentPreset')
-  assert.equal(hero.component({ useProjection: () => 'codexhost-codex' }), null)
-  assert.equal(hero.component({ useProjection: () => 'codexhost-claude-code' }), null)
+  assert.equal(hero.component({ useProjection: () => 'dsh-host-codex' }), null)
+  assert.equal(hero.component({ useProjection: () => 'dsh-host-claude-code' }), null)
   assert.equal(hero.component({ useProjection: () => 'coding', NativePreset: nativePreset.component })[0], nativePreset.component)
   const marker = registrations.find(entry => entry.spec.name === 'sidebar.session.row.leading')
-  assert.equal(marker.spec.id, 'codexhost-session-agent')
-  for (const [preset, id, label] of [['codexhost-codex', 'codex', 'Codex'], ['codexhost-claude-code', 'claude-code', 'Claude Code'], ['custom-dsh-preset', 'deepseek-harness', 'DSH'], [undefined, 'deepseek-harness', 'DSH']]) {
+  assert.equal(marker.spec.id, 'dsh-host-session-agent')
+  for (const [preset, id, label] of [['dsh-host-codex', 'codex', 'Codex'], ['dsh-host-claude-code', 'claude-code', 'Claude Code'], ['custom-dsh-preset', 'deepseek-harness', 'DSH'], [undefined, 'deepseek-harness', 'DSH']]) {
     const mark = marker.component({ sessionId: 'saved', useSessions: select => select({ byId: { saved: { projectionValues: { agentPreset: preset } } } }) })
     assert.equal(mark[0], 'img')
-    assert.equal(mark[1]['data-codexhost-session-agent'], id)
+    assert.equal(mark[1]['data-dsh-host-session-agent'], id)
     assert.equal(mark[1].alt, label)
     assert.equal(mark[1].width, 16)
   }
   assert.equal(marker.component({ sessionId: 'missing', useSessions: select => select({ byId: {} }) }), null)
-  assert.equal(registrations.find(entry => entry.spec.name === 'main').spec.key, 'codexhost-console')
-  assert.equal(registrations.find(entry => entry.spec.name === 'sidebar.footer.action').spec.id, 'codexhost-console')
+  assert.equal(registrations.find(entry => entry.spec.name === 'main').spec.key, 'dsh-host-console')
+  assert.equal(registrations.find(entry => entry.spec.name === 'sidebar.footer.action').spec.id, 'dsh-host-console')
   assert.equal(registrations.some(entry => entry.spec.name === 'sidebar.panellist'), false)
   for (const native of [nativeUsage, nativeActivity]) {
     const registration = registrations.find(entry => native === nativeBar ? entry.spec.name === 'conversation.composer.bar' : entry.spec.id === native.options.id)

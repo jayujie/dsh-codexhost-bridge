@@ -11,7 +11,7 @@ test('retained external preset refuses to fall back when the bridge has unloaded
 test('external commands cannot call the DSH model while ordinary DSH calls still delegate', () => {
   const handlers = {}
   const agent = { session: {} }
-  let preset = 'codexhost-claude-code'
+  let preset = 'dsh-host-claude-code'
   apply({ on(name, handler) { handlers[name] = handler }, get(name) {
     if (name === 'agents') return { get: () => agent, currentInitiator: () => agent }
     if (name === 'agentPresets') return { presetForSession: () => preset }

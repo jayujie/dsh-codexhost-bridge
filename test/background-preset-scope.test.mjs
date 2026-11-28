@@ -12,7 +12,7 @@ test('external Claude preset explicitly owns its standard shell and job tools ra
   const driver=await installNativeSessionDriver(ctx,{connect:async()=>{assert.fail('Preset registration must not connect')}})
   try{
     await Promise.all(effects)
-    const claude=presets.find(p=>p.id==='codexhost-claude-code'),codex=presets.find(p=>p.id==='codexhost-codex'),agy=presets.find(p=>p.id==='codexhost-antigravity')
+    const claude=presets.find(p=>p.id==='dsh-host-claude-code'),codex=presets.find(p=>p.id==='dsh-host-codex'),agy=presets.find(p=>p.id==='dsh-host-antigravity')
     assert.ok(claude.plugins.some(p=>p.name==='@deepseek-ai/dsh-tool-pwsh'))
     assert.ok(claude.plugins.some(p=>p.name==='@deepseek-ai/dsh-tool-jobs'))
     assert.ok(agy.plugins.some(p=>p.name==='@deepseek-ai/dsh-tool-pwsh'))

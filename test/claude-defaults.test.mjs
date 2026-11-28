@@ -5,11 +5,11 @@ const ref=value=>'claude-model-v1.'+Buffer.from(value).toString('base64url')
 function fixture({child=false,saved,mapped,missing}={}){
  const events=[],calls=[]
  const session={id:'claude-default-fixture',header:{cwd:'D:/work',...(child?{origin:'subagent',parentSession:'parent'}:{})},snapshotEvents:()=>events,append(type,data){const event={type,data,seq:events.length,ignorable:type.startsWith('plugin:')};events.push(event);return event}}
- if(saved)session.append('plugin:codexhost/configuration',{harnessId:'claude-code',modelId:ref(saved)})
- if(mapped)session.append('plugin:codexhost/thread',{version:1,sessionId:session.id,phase:'ready',harnessId:'claude-code',threadId:'existing-thread',appliedConfiguration:{modelId:ref(mapped),permissionModeId:child?'plan':'default'}})
+ if(saved)session.append('plugin:dsh-host/configuration',{harnessId:'claude-code',modelId:ref(saved)})
+ if(mapped)session.append('plugin:dsh-host/thread',{version:1,sessionId:session.id,phase:'ready',harnessId:'claude-code',threadId:'existing-thread',appliedConfiguration:{modelId:ref(mapped),permissionModeId:child?'plan':'default'}})
  const models=['default','haiku','sonnet','opus'].filter(value=>value!==missing).map(value=>({ref:{id:ref(value)},label:value,thinkingOptions:[{id:'low',label:'low'}]}))
  const peer={closed:new Promise(()=>{}),subscribe:()=>()=>{},close(){},async request(method){calls.push(method);if(method!=='codexhost/harness/inspect')throw Error('Catalog policy must not submit models or read histories');return{status:'ready',catalog:{models,defaultModel:{id:ref('default')}},permissionModes:{modes:[{id:'default'},{id:'plan'},{id:'bypassPermissions'}],defaultModeId:'default'}}}}
- const driver=new NativeSessionDriver({agentPresets:{presetForSession:()=> 'codexhost-claude-code'},sessionPersistence:{async flush(){}}},{appendPluginRecord:(s,type,data)=>s.append(type,data)},{connect:async()=>peer})
+ const driver=new NativeSessionDriver({agentPresets:{presetForSession:()=> 'dsh-host-claude-code'},sessionPersistence:{async flush(){}}},{appendPluginRecord:(s,type,data)=>s.append(type,data)},{connect:async()=>peer})
  const agent={id:session.id,session,runMaintenance:fn=>fn()}
  return{driver,agent,events,calls}
 }

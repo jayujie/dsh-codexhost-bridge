@@ -9,7 +9,7 @@ const source = (await readFile(new URL('../client.mjs', import.meta.url), 'utf8'
 function fixture(options = {}) {
   const state = [], calls = []; let cursor = 0
   const slider = { Root() {}, Track() {}, Range() {}, Thumb() {} }, icon = function NativeDshChevron() {}
-  const api = vm.runInNewContext(source + '\n;({ThinkingSlider,Picker,css})', {
+  const api = vm.runInNewContext(source + '\n;({ThinkingSlider,Picker,css,isMaxEffortSnapshot})', {
     h: (tag, props, ...children) => ({ tag, props, children }), Menu() {}, IconChevronDownOutlineRegular: icon,
     getSliderPrimitive: () => slider, useEffect() {},
     useState(initial) { const at = cursor++; if (!(at in state)) state[at] = initial; return [state[at], value => { state[at] = typeof value === 'function' ? value(state[at]) : value }] },
@@ -111,4 +111,39 @@ test('actual shipped Claude adapter preserves CLI capability fields and sends se
     const thinking = api.claudeThinkingConfiguration(id)
     assert.equal(thinking.effort, id); assert.equal(api.claudeThinkingFlagSettings(thinking).effortLevel, id)
   }
+})
+
+test('ThinkingSlider activates max/Ultra effect whenever pulled to a model’s highest effort, not only literal ultra', () => {
+  const highMax = fixture({ options: ['low', 'medium', 'high'].map(id => ({ id, label: id })), selected: 'medium', inline: true })
+  assert.equal(highMax.render().props['data-max'], undefined)
+  highMax.render().children[2].props.onPointerDown()
+  highMax.render().children[2].props.onValueChange([2])
+  assert.equal(highMax.render().props['data-max'], 'true')
+
+  const xhighModel = fixture({ options: ['low', 'medium', 'high', 'xhigh'].map(id => ({ id, label: id })), selected: 'high', inline: true })
+  assert.equal(xhighModel.render().props['data-max'], undefined, 'high is not max when xhigh exists')
+  xhighModel.render().children[2].props.onPointerDown()
+  xhighModel.render().children[2].props.onValueChange([3])
+  assert.equal(xhighModel.render().props['data-max'], 'true')
+
+  const single = fixture({ options: [{ id: 'medium', label: 'medium' }], selected: 'medium', inline: true })
+  assert.equal(single.render().props['data-max'], undefined)
+
+  assert.equal(highMax.api.isMaxEffortSnapshot({
+    current: { provider: 'antigravity', model: 'gemini-4-carbon', reasoningEffort: 'high' },
+    groups: [{ id: 'antigravity', models: [{ id: 'gemini-4-carbon', reasoning: { efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }] } }] }],
+  }), true)
+  assert.equal(highMax.api.isMaxEffortSnapshot({
+    current: { provider: 'antigravity', model: 'gemini-4-neon', reasoningEffort: 'high' },
+    groups: [{ id: 'antigravity', models: [{ id: 'gemini-4-neon', reasoning: { efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }, { id: 'xhigh' }] } }] }],
+  }), false)
+  assert.equal(highMax.api.isMaxEffortSnapshot({
+    current: { provider: 'antigravity', model: 'gemini-4-neon', reasoningEffort: 'xhigh' },
+    groups: [{ id: 'antigravity', models: [{ id: 'gemini-4-neon', reasoning: { efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }, { id: 'xhigh' }] } }] }],
+  }), true)
+  assert.match(highMax.api.css, /\.ch-thinking-card\[data-max="true"\]/)
+  assert.match(highMax.api.css, /\.w > \.ch-thinking-card \{ margin:-4px; width:calc\(100% \+ 8px\);/)
+  assert.match(highMax.api.css, /\.ch-thinking-thumb[^}]*border-radius:50%; corner-shape:round;/)
+  assert.match(highMax.api.css, /\.ch-thinking-track[^}]*border-radius:12px; corner-shape:round;/)
+  assert.match(highMax.api.css, /@keyframes ch-thinking-ultra-flow/)
 })

@@ -23,9 +23,9 @@ export class OwnedHostRuntime {
   }
 
   async ensure() {
-    if (this.#closed) throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'CodexHost bridge has stopped')
+    if (this.#closed) throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'DSH Host bridge has stopped')
     if (hostIsAlive(await readHostDescriptor(hostDescriptorPath(this.#config)))) return
-    if (this.#config.autoStartHost === false) throw new HostConnectionError('HOST_NOT_RUNNING', 'CodexHost is not running. Start it from the console, or enable the plugin background Host.')
+    if (this.#config.autoStartHost === false) throw new HostConnectionError('HOST_NOT_RUNNING', 'DSH Host is not running. Start it from the console, or enable the plugin background Host.')
     this.#starting ??= this.#start().finally(() => { this.#starting = undefined })
     return this.#starting
   }
@@ -57,17 +57,17 @@ export class OwnedHostRuntime {
         await delay(100)
       }
     }
-    if (this.#closed) { await this.#releaseLock(); throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'CodexHost bridge has stopped') }
+    if (this.#closed) { await this.#releaseLock(); throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'DSH Host bridge has stopped') }
     const environment = backendEnvironment({ ...installation, stockCodexPath: stock }, this.#config, process.env)
     const child = spawn(installation.nodePath, [installation.runtimePath, 'app-server'], { env: environment, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] })
     this.#child = child
     let failure
     child.once('error', () => { failure = new HostConnectionError('HOST_START_FAILED', 'The background Host process could not be started; check the configured executable paths') })
-    child.once('exit', code => { failure = new HostConnectionError('HOST_START_FAILED', `The background Host exited (${code}); inspect the original Host logs in the console`); if (this.#child === child) { this.#child = undefined; void this.#releaseLock() } })
+    child.once('exit', code => { failure = new HostConnectionError('HOST_START_FAILED', `The background Host exited (${code}); inspect the DSH Host logs in the console`); if (this.#child === child) { this.#child = undefined; void this.#releaseLock() } })
     child.stdin.on('error', () => {})
     try {
       while (Date.now() < deadline) {
-        if (this.#closed) throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'CodexHost bridge has stopped')
+        if (this.#closed) throw new HostConnectionError('HOST_DRIVER_UNLOADED', 'DSH Host bridge has stopped')
         if (failure) throw failure
         const descriptor = await readHostDescriptor(installation.descriptorPath)
         if (descriptor?.ownerPid === child.pid && hostIsAlive(descriptor)) return

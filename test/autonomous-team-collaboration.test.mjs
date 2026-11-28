@@ -4,7 +4,7 @@ import { AutonomousTeamCollaboration, AUTONOMOUS_COLLABORATION } from '../autono
 import { installCollaborationBridge } from '../host-collaboration.mjs'
 
 function fixture() {
-  const events = [{ type: 'plugin:codexhost/thread', ignorable: true, data: { version: 1, harnessId: 'claude-code', phase: 'ready', threadId: 'thread', sessionId: 'agent' } }]
+  const events = [{ type: 'plugin:dsh-host/thread', ignorable: true, data: { version: 1, harnessId: 'claude-code', phase: 'ready', threadId: 'thread', sessionId: 'agent' } }]
   const life = new AbortController(), maintenance = new AbortController(), calls = []
   const state = { loaded: [], status: 'active', turns: [{ id: 'autonomous-turn', status: 'inProgress', items: [] }], flushes: 0, disposed: 0, stopped: false, requested: false, owner: 'claude-code', allowed: true, reads: 0 }
   const agent = { id: 'agent', status: 'idle', model: { current: () => ({ provider: 'fixture', model: 'fixture' }) }, session: { header: {}, snapshotEvents: () => events, append(type, data) { events.push({ type, data, ignorable: true }) } }, async runMaintenance(fn) { assert.equal(state.maintenance, undefined); state.maintenance = true; try { return await fn(maintenance.signal) } finally { state.maintenance = undefined } }, inject() { assert.fail('Autonomous task calls must not inject model input') } }

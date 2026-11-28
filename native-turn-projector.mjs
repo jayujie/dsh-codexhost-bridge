@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { NativeToolProjector, nativeModelSource } from './native-tool-projector.mjs'
+import { normalizeFileUriMarkdownLinks } from './file-uri-links.mjs'
 
 /** Translates native Host text/reasoning into DSH's existing live and durable stream. */
 export class NativeTurnProjector {
@@ -24,7 +25,7 @@ export class NativeTurnProjector {
     this.#dispatch = dispatch
     this.#position = { turn, step }
     this.#nextRevision = nextRevision
-    this.#attemptId = `${agent.id}:codexhost:${randomUUID()}`
+    this.#attemptId = `${agent.id}:dsh-host:${randomUUID()}`
     this.#accumulator = new helpers.AssistantStreamAccumulator()
     this.#assembler = new helpers.BlockAssembler()
     this.#tools = new NativeToolProjector(agent.session, helpers, this.#position, provider.split('/').at(-1), this.source)
@@ -59,7 +60,7 @@ export class NativeTurnProjector {
     if (message.method === 'item/started') {
       const item = p.item
       if (item?.type !== 'agentMessage') return
-      const text = typeof item.text === 'string' ? item.text : ''
+      const text = typeof item.text === 'string' ? normalizeFileUriMarkdownLinks(item.text) : ''
       if (text === '') return
       const block = this.#block(item.id, 'text')
       if (block.ended || block.text !== '') return
@@ -88,7 +89,8 @@ export class NativeTurnProjector {
       const item = p.item
       if (item?.type !== 'agentMessage' && item?.type !== 'reasoning') return
       const type = item.type === 'agentMessage' ? 'text' : 'reasoning'
-      const text = typeof item.text === 'string' ? item.text : Array.isArray(item.summary) ? item.summary.join('\n') : ''
+      const rawText = typeof item.text === 'string' ? item.text : Array.isArray(item.summary) ? item.summary.join('\n') : ''
+      const text = type === 'text' ? normalizeFileUriMarkdownLinks(rawText) : rawText
       const block = this.#block(item.id, type)
       if (block.ended) return
       // A Host may send only a completed item, without preceding delta frames.
@@ -103,6 +105,7 @@ export class NativeTurnProjector {
   #endBlock(block) {
     if (block.ended) return
     block.ended = true
+    if (block.type === 'text') block.text = normalizeFileUriMarkdownLinks(block.text)
     this.#push({ type: 'block-end', index: block.index, block: { type: block.type, text: block.text } })
   }
 
@@ -124,7 +127,11 @@ export class NativeTurnProjector {
     for (const block of this.#blocks.values()) this.#endBlock(block)
     if (this.#usage !== undefined) this.#push({ type: 'usage', usage: this.#usage })
     this.#push({ type: 'finish', reason: { kind: 'stop' } })
-    const content = this.#assembler.blocks()
+    const content = this.#assembler.blocks().map(block =>
+      block?.type === 'text' && typeof block.text === 'string'
+        ? { ...block, text: normalizeFileUriMarkdownLinks(block.text) }
+        : block,
+    )
     const stream = [...this.#accumulator.snapshot()]
     let event
     if (content.length > 0) {

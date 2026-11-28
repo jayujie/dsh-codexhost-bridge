@@ -169,7 +169,7 @@ test('schema discovery and denied requests keep durable request/result records',
   try {
     await lease.call({ id: 'schemas', name: '__list__', arguments: {} })
     await denied(() => lease.call({ id: 'denied', name: 'pwsh', arguments: {} }))
-    const records = f.events.filter(event => event.type === 'plugin:codexhost/collaboration')
+    const records = f.events.filter(event => event.type === 'plugin:dsh-host/collaboration')
     assert.deepEqual(records.map(event => [event.data.id, event.data.phase]), [['schemas', 'request'], ['schemas', 'result'], ['denied', 'request'], ['denied', 'result']])
     assert.equal(records.at(-1).data.result.isError, true)
     assert.equal(f.executions.length, 0)

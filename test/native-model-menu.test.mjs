@@ -26,7 +26,7 @@ test('Host directory adapts exact model/effort IDs with stable snapshots and no 
   const state = directory.modelStore.getSnapshot()
   assert.equal(directory.modelStore.getSnapshot(),state)
   assert.equal(state.current.reasoningEffort,'high')
-  assert.equal(state.groups[0].models[0].reasoning.efforts[1].name,'High')
+  assert.equal(state.groups[0].models[0].reasoning.efforts[1].name,'high')
   assert.equal(state.groups[0].models[1].reasoning.defaultEffort,undefined)
   let notified = 0
   const off = directory.modelStore.subscribe(() => notified++)
@@ -84,12 +84,60 @@ test('opening the native menu during selection does not invalidate the pending H
   let finish, reads = 0
   const directory = new api.CatalogDirectory({catalog:async () => {reads++; return {ok:true,value:catalog}},configure:() => new Promise(resolve => {finish=resolve})},'s')
   directory.set({status:'ready',catalog,error:''})
-  const write = directory.configure({thinkingOptionId:'low'})
+  const write = directory.configure({modelId:'m2'})
   await directory.load()
   assert.equal(reads,0)
-  assert.equal(directory.modelStore.getSnapshot().pending.reasoningEffort,'low')
+  assert.equal(directory.modelStore.getSnapshot().pending.model,'m2')
   finish({ok:true,value:catalog}); await write
   assert.equal(directory.state.status,'ready')
+  directory.dispose()
+})
+
+test('effort-only changes update optimistically without pending flicker, block stale loads, and roll back on failure', async () => {
+  let finish1, finish2, reject2, reads = 0
+  let call = 0
+  const directory = new api.CatalogDirectory({
+    catalog: async () => { reads++; return { ok: true, value: catalog } },
+    configure: (_, cfg) => new Promise((resolve, reject) => {
+      call++
+      if (call === 1) finish1 = resolve
+      else { finish2 = resolve; reject2 = reject }
+    }),
+  }, 's')
+  directory.set({ status: 'ready', catalog, error: '' })
+  const w1 = directory.configure({ thinkingOptionId: 'low' })
+  assert.equal(directory.state.status, 'ready')
+  assert.equal(directory.state.savingPermission, false)
+  assert.equal(directory.modelStore.getSnapshot().pending, null)
+  assert.equal(directory.modelStore.getSnapshot().current.reasoningEffort, 'low')
+  await directory.load()
+  assert.equal(reads, 0, 'in-flight optimistic effort write blocks stale catalog reload')
+
+  const w2 = directory.configure({ thinkingOptionId: 'high' })
+  assert.equal(directory.modelStore.getSnapshot().current.reasoningEffort, 'high')
+  const confirmed1 = { ...catalog, selection: { ...catalog.selection, thinkingOptionId: 'low' } }
+  finish1({ ok: true, value: confirmed1 })
+  await w1
+  assert.equal(directory.modelStore.getSnapshot().current.reasoningEffort, 'high', 'older resolution must not overwrite newer optimistic effort')
+
+  reject2(new Error('disk full'))
+  const failed = await w2
+  assert.equal(failed.ok, false)
+  assert.equal(directory.state.catalog, confirmed1, 'failure rolls back to latest confirmed server catalog')
+  assert.equal(directory.modelStore.getSnapshot().current.reasoningEffort, 'low')
+  assert.equal(directory.modelStore.getSnapshot().pending, null)
+  directory.dispose()
+})
+
+test('permission-only changes do not trigger model pending state', async () => {
+  let finish
+  const directory = new api.CatalogDirectory({ configure: () => new Promise(resolve => { finish = resolve }) }, 's')
+  directory.set({ status: 'ready', catalog, error: '' })
+  const write = directory.configure({ permissionModeId: 'workspace-write' })
+  assert.equal(directory.state.savingPermission, true)
+  assert.equal(directory.modelStore.getSnapshot().pending, null)
+  finish({ ok: true, value: catalog }); await write
+  assert.equal(directory.state.savingPermission, false)
   directory.dispose()
 })
 
@@ -99,4 +147,30 @@ test('the native effort pane renders an inline slider, not a separate footer tri
   assert.doesNotMatch(footer,/h\(ThinkingSlider|h\(NativeRecoveryControl|ch-native-models/)
   assert.match(source,/EffortPane: NativeEffortSliderPane/)
   assert.match(source,/h\(ThinkingSlider, \{ \.\.\.props, inline: true \}\)/)
+})
+
+test('running external conversations keep model and effort controls enabled while locking Agent switching', () => {
+  const controlsApi = vm.runInNewContext(source + '\n;({NativeAgentControls,HostModelSelect,Picker})', {
+    h: (tag, props, ...children) => ({ tag, props, children }),
+    AGENT_ICONS: { codex: 'codex-icon' },
+    DelegationPicker() {},
+    useRef: value => ({ current: value }),
+    useEffect() {},
+    useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
+  })
+  const hostDirectory = { subscribe() {}, getSnapshot: () => ({ status: 'ready', catalog, error: '' }), modelStore: { getSnapshot: () => null }, load() {} }
+  const tree = controlsApi.NativeAgentControls({
+    sessionId: 'one',
+    hostDirectory,
+    nativeModel: { Component: NativeComponent, t: key => key },
+    useProjection: () => 'dsh-host-codex',
+    useSessions: fn => fn({ byId: { one: { running: true, blank: false } } }),
+    useSession: fn => fn({ subagent: null }),
+    useInput: fn => fn({}),
+    t: key => key,
+  })
+  const modelControl = tree.children.find(child => child?.tag === controlsApi.HostModelSelect)
+  const agentPicker = tree.children.find(child => child?.tag === controlsApi.Picker)
+  assert.equal(modelControl.props.disabled, false)
+  assert.equal(agentPicker.props.disabled, true)
 })

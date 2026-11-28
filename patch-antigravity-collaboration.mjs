@@ -86,7 +86,7 @@ export function patchAntigravityCollaboration(source, replace) {
     this.#stopped = true;
     this.#dshCollaboration?.stop();
     for (const pending of this.#pending.values()) {
-      this.#finish(pending, "cancelled", "The codexhost Turn ended before an answer was received. Do not infer a user choice.");
+      this.#finish(pending, "cancelled", "The dsh-host Turn ended before an answer was received. Do not infer a user choice.");
     }
   }
   dispose() {

@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import { installNativeRepliesClient } from '../native-replies-client.mjs'
 
-const eventType = 'plugin:codexhost/native-message'
+const eventType = 'plugin:dsh-host/native-message'
 const root = new URL('../../../', import.meta.url)
 const data = { version: 1, harnessId: 'codex', threadId: 'thread', hostTurnId: 'turn', itemId: 'item', text: '原文\n**保持**', status: 'completed' }
 function event(seq = 1, patch = {}) { return { type: eventType, seq, time: 1000 + seq, surfaceOp: 'none', data: { ...data, revision: seq, ...patch } } }
@@ -24,7 +24,8 @@ test('仅注册新事件的两个 target，注销幂等且部分失败会回滚'
   const registered = definitions()
   assert.deepEqual(registered.map(x => x.target), ['chat', 'trajectory'])
   assert.equal(new Set(registered.map(x => x.kind)).size, 2)
-  for (const definition of registered) assert.deepEqual(Object.keys(definition.match), [eventType])
+  // Current name plus the pre-2026-11-27 name, so old Sessions keep rendering.
+  for (const definition of registered) assert.deepEqual(Object.keys(definition.match), [eventType, 'plugin:codexhost/native-message'])
   let disposed = 0
   const dispose = installNativeRepliesClient({ uiConversation: { events: { register: () => () => { disposed++ } } } })
   dispose(); dispose()

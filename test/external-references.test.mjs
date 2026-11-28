@@ -29,8 +29,8 @@ test('plain messages and non-user quoted reference tokens are preserved', async 
 for (const harness of ['codex', 'claude-code']) test(`${harness} driver sends and durably records the resolved DSH snapshot`, async () => {
   const events = [], listeners = new Set(), sent = []
   const session = { id: 'local', header: { cwd: 'D:/test' }, snapshotEvents: () => events, append(type, data) { const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }; events.push(event); return event } }
-  session.append('plugin:codexhost/thread', { version: 1, sessionId: 'local', phase: 'ready', harnessId: harness, threadId: 'thread', appliedConfiguration: { modelId: 'test', permissionModeId: harness === 'codex' ? 'read-only' : 'plan' } })
-  session.append('plugin:codexhost/configuration', { harnessId: harness, modelId: 'test', permissionModeId: harness === 'codex' ? 'read-only' : 'plan' })
+  session.append('plugin:dsh-host/thread', { version: 1, sessionId: 'local', phase: 'ready', harnessId: harness, threadId: 'thread', appliedConfiguration: { modelId: 'test', permissionModeId: harness === 'codex' ? 'read-only' : 'plan' } })
+  session.append('plugin:dsh-host/configuration', { harnessId: harness, modelId: 'test', permissionModeId: harness === 'codex' ? 'read-only' : 'plan' })
   const snapshot = { source: { kind: 'session-reference' }, content: [{ type: 'text', text: 'actual DSH transcript fixture' }] }
   const ctx = { get: key => key === 'sessionReferenceResolver' ? { async prepare(_agent, content) { return { content, additionalContext: snapshot } } } : undefined, agentPresets: { presetForSession: () => 'codexhost-' + harness }, sessionPersistence: { async flush() {} } }
   const peer = { closed: new Promise(() => {}), close() {}, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, async request(method, params) {

@@ -54,6 +54,6 @@ test('Recorded real Codex shell and file-change items retain their names, diffs,
   assert.equal(events.filter(event => event.type === 'tool/result').length, items.length)
   assert.ok(events.some(event => event.type === 'tool/call' && event.data.name === 'exec_command'))
   assert.ok(events.some(event => event.type === 'tool/result' && event.data.message.content[0].text.includes('323')))
-  assert.ok(events.some(event => event.type === 'tool/result' && event.data.meta.codexHost.item.type === 'fileChange' && event.data.message.content[0].text.includes('+edited-ok')))
+  assert.ok(events.some(event => event.type === 'tool/result' && event.data.meta.dshHost.item.type === 'fileChange' && event.data.message.content[0].text.includes('+edited-ok')))
   assert.equal(events.filter(event => event.type === 'tool/result' && event.data.message.isError).length, items.filter(item => item.status === 'failed' || (Number.isInteger(item.exitCode) && item.exitCode !== 0)).length)
 })

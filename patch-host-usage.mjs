@@ -7,7 +7,7 @@ export async function patchedHostUsage(source) {
   const header = '// packages/host-runtime/src/usage-metering.ts\n'
   const needle = 'if (this.#historyComplete && !this.#invalidRecord) {'
   if (source.split(header).length !== 2 || source.split(needle).length !== 2) throw new Error('Installed Host runtime does not match the verified usage meter')
-  const helper = (await readFile(new URL('./host-usage-totals.mjs', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').replace('export function', 'function')
+  const helper = (await readFile(new URL('./host-usage-totals.mjs', import.meta.url), 'utf8')).replace('export function', 'function')
   return source.replace(header, `${header}${helper}\n`).replace(needle, `${needle}\n        const dshTotals = hostUsageTotals(this.#requests.values());\n        if (dshTotals) Object.assign(usage, dshTotals);`)
 }
 

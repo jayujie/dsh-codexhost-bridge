@@ -31,7 +31,7 @@ const start = engine => ({ action: 'start', engine, task: 'A self-contained read
 test('native DSH starts a standard spawn with the selected preset, parent delivery and configured depth', async () => {
   const f = setup(), first = await f.manager.run(f.parent, start('codex'), signal())
   assert.equal(first.status, 'running'); assert.equal(f.children.length, 1)
-  assert.equal(f.specs[0].provider, 'spawn'); assert.equal(f.specs[0].agentPreset, 'codexhost-codex')
+  assert.equal(f.specs[0].provider, 'spawn'); assert.equal(f.specs[0].agentPreset, 'dsh-host-codex')
   assert.equal(f.specs[0].parent, f.parent); assert.equal(f.specs[0].delivery, 'parent'); assert.equal(f.specs[0].maxDepth, 1)
   assert.equal(f.specs[0].childId, first.session_id); assert.equal(first.name, 'agent-1')
   assert.equal(nativeTaskRecords(f.parent.session).get(first.task_id).managedSubagent, true)
@@ -48,7 +48,7 @@ test('native DSH starts a standard spawn with the selected preset, parent delive
 test('failed native tasks expose the recorded category without inventing a closing message', async () => {
   const f = setup(), receipt = await f.manager.run(f.parent, start('codex'), signal())
   const child = f.children[0]
-  child.session.append('plugin:codexhost/turn-failure', {version: 1, turn: 1, harnessId: 'codex', failure: {code: 'model_not_found', message: 'reported native failure'}})
+  child.session.append('plugin:dsh-host/turn-failure', {version: 1, turn: 1, harnessId: 'codex', failure: {code: 'model_not_found', message: 'reported native failure'}})
   child.session.append('turn/end', {turn: 1, reason: {kind: 'error', error: {code: 'UNKNOWN', message: 'generic framework failure'}}})
   child.status = 'idle'; child.waiting.resolve()
   f.live.delete(child.id)
@@ -60,7 +60,7 @@ test('failed native tasks expose the recorded category without inventing a closi
 test('a later failed turn never returns an earlier successful reply or stale native error', async () => {
   const f = setup(), receipt = await f.manager.run(f.parent, start('codex'), signal())
   const child = f.children[0]
-  child.session.append('plugin:codexhost/turn-failure', {version: 1, turn: 1, harnessId: 'codex', failure: {code: 'old_error', message: 'old failure'}})
+  child.session.append('plugin:dsh-host/turn-failure', {version: 1, turn: 1, harnessId: 'codex', failure: {code: 'old_error', message: 'old failure'}})
   f.finish(child, 'completed', 'previous successful answer')
   child.session.append('turn/start', {turn: 2})
   child.session.append('turn/end', {turn: 2, reason: {kind: 'error', error: {code: 'UNKNOWN', message: 'current failure'}}})
@@ -75,7 +75,7 @@ test('simultaneous duplicate starts coalesce before creation and cannot overwrit
   const a = f.manager.run(f.parent, start('claude-code'), signal()), b = f.manager.run(f.parent, start('claude-code'), signal())
   gate.resolve(); const [x, y] = await Promise.all([a, b])
   assert.equal(x.task_id, y.task_id); assert.equal(f.children.length, 1)
-  assert.equal(f.specs[0].agentPreset, 'codexhost-claude-code'); assert.equal(f.specs[0].delivery, 'parent')
+  assert.equal(f.specs[0].agentPreset, 'dsh-host-claude-code'); assert.equal(f.specs[0].delivery, 'parent')
   await assert.rejects(f.manager.run(f.parent, { ...start('claude-code'), task: 'different task' }, signal()), /already has/)
   await f.manager.dispose()
 })
@@ -168,7 +168,7 @@ test('external main Agents can create standard children without switching the pa
   const f = setup(); f.parent.external = true
   const result = await f.manager.run(f.parent, start('claude-code'), signal())
   assert.equal(result.status, 'running'); assert.equal(f.specs[0].parent, f.parent)
-  assert.equal(f.specs[0].agentPreset, 'codexhost-claude-code'); assert.equal(f.parent.external, true)
+  assert.equal(f.specs[0].agentPreset, 'dsh-host-claude-code'); assert.equal(f.parent.external, true)
   await f.manager.dispose()
 })
 
@@ -200,8 +200,8 @@ test('subagent_host entry can start without a chip while compatibility start sti
 
 test('external parents route native DSH teammates to their saved original native preset', async () => {
   const f = setup(); f.parent.external = true
-  f.parent.session.append('plugin:codexhost/original-preset', { preset: 'native-review' })
-  f.ctx.agentPresets.presetForSession = () => 'codexhost-codex'
+  f.parent.session.append('plugin:dsh-host/original-preset', { preset: 'native-review' })
+  f.ctx.agentPresets.presetForSession = () => 'dsh-host-codex'
   const result = await f.manager.start(f.parent, { ...start('deepseek-harness'), name: 'native' }, signal(), { requireSelection: false })
   assert.equal(result.status, 'running'); assert.equal(f.specs[0].agentPreset, 'native-review')
   await f.manager.dispose()

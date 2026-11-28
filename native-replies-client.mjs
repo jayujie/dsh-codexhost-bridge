@@ -1,9 +1,12 @@
 // UI-only projection of durable, ignorable plugin events. No execution or model surface writes.
-const NATIVE_REPLIES_EVENT = 'plugin:codexhost/native-message'
+import { normalizeFileUriMarkdownLinks } from './file-uri-links.mjs'
+// Literal copy of host-identity.mjs (build-client.mjs strips imports): write dsh-host, read both.
+// plugin:codexhost/native-message is read-only compatibility with sessions recorded before 2026-11-27.
+const NATIVE_REPLIES_EVENTS = ['plugin:dsh-host/native-message', 'plugin:codexhost/native-message']
 
 function nativeRepliesData(event) {
   const data = event?.data
-  if (event?.type !== NATIVE_REPLIES_EVENT || !data || data.version !== 1
+  if (!NATIVE_REPLIES_EVENTS.includes(event?.type) || !data || data.version !== 1
     || !['claude-code', 'codex', 'antigravity'].includes(data.harnessId)
     || !['threadId', 'hostTurnId', 'itemId'].every(key => typeof data[key] === 'string' && data[key].length > 0)
     || typeof data.text !== 'string'
@@ -44,7 +47,7 @@ function nativeRepliesProjection(context) {
   const data = latest.data
   const time = data.nativeTime ?? latest.time
   const visible = data.suppressed !== true && text.trim() !== ''
-  const blocks = visible ? [{ kind: 'text', text }] : []
+  const blocks = visible ? [{ kind: 'text', text: normalizeFileUriMarkdownLinks(text) }] : []
   const streaming = data.status === 'streaming'
   // A provider/API failure is not a user cancellation. Preserve the native error text without a 已停止 label.
   const interrupted = data.status === 'interrupted'
@@ -58,9 +61,9 @@ function nativeRepliesProjection(context) {
 
 function nativeRepliesDefinition(target) {
   return {
-    kind: `codexhost-native-reply-${target}`,
+    kind: `dsh-host-native-reply-${target}`,
     target,
-    match: { [NATIVE_REPLIES_EVENT]: nativeRepliesMatch },
+    match: Object.fromEntries(NATIVE_REPLIES_EVENTS.map(type => [type, nativeRepliesMatch])),
     start: (_context, match) => match.event,
     update: (_context, match) => match.event,
     publication: () => 'immediate',

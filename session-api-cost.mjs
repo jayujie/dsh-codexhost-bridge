@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { hostDataDirectory } from './backend-paths.mjs'
 import { dshNormalizeAntigravityModelForPrice } from './antigravity-perf.mjs'
+import { isHostProvider, hostProviderEngine } from './external-engines.mjs'
 
 let localPricesModulePromise
 const loadLocalPricesModule = () => localPricesModulePromise ??= import('./local-model-prices.mjs')
@@ -15,34 +16,65 @@ export function costRequest(event) {
   const source = message?.source
   if (source?.kind !== 'model' || typeof source.model !== 'string' || !source.model) return undefined
   // Host intermediate messages are not requests; only the terminal message carries Turn usage.
-  if (source.provider?.startsWith('codexhost/') && !usage) return undefined
+  if (isHostProvider(source.provider) && !usage) return undefined
   if (typeof message.id !== 'string' || !message.id) return undefined
   const buckets = usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens ?? 0, cacheWriteTokens: usage.cacheWriteTokens ?? 0 }
   return { id: message.id, model: source.model, provider: source.provider ?? '', seq: event.seq, ...(buckets && Object.values(buckets).every(count) ? { usage: buckets } : {}) }
 }
 
-export function requestCost(request, lookup) {
+export function requestCostBreakdown(request, lookup) {
   const u = request.usage
   let p = lookup.find(request.model, request.provider)
-  if (!p && request.provider === 'codexhost/antigravity') {
+  if (!p && hostProviderEngine(request.provider) === 'antigravity') {
     const normalized = dshNormalizeAntigravityModelForPrice(request.model)
     if (normalized) p = lookup.find(normalized, 'google')
   }
   if (!u || !p || (u.cacheReadTokens > 0 && p.cacheRead === undefined) || (u.cacheWriteTokens > 0 && p.cacheWrite === undefined)) return undefined
-  const total = (u.inputTokens * p.input + u.outputTokens * p.output + u.cacheReadTokens * (p.cacheRead ?? 0) + u.cacheWriteTokens * (p.cacheWrite ?? 0)) / 1e6
-  return Number.isFinite(total) && total >= 0 ? total : undefined
+  const inputCostUsd = (u.inputTokens * p.input) / 1e6
+  const outputCostUsd = (u.outputTokens * p.output) / 1e6
+  const cacheReadCostUsd = (u.cacheReadTokens * (p.cacheRead ?? 0)) / 1e6
+  const cacheWriteCostUsd = (u.cacheWriteTokens * (p.cacheWrite ?? 0)) / 1e6
+  const total = inputCostUsd + outputCostUsd + cacheReadCostUsd + cacheWriteCostUsd
+  if (!Number.isFinite(total) || total < 0) return undefined
+  const cacheSavingsUsd = u.cacheReadTokens > 0 && p.input > (p.cacheRead ?? 0)
+    ? (u.cacheReadTokens * (p.input - (p.cacheRead ?? 0))) / 1e6
+    : 0
+  return { total, inputCostUsd, outputCostUsd, cacheReadCostUsd, cacheWriteCostUsd, cacheSavingsUsd }
+}
+
+export function requestCost(request, lookup) {
+  return requestCostBreakdown(request, lookup)?.total
 }
 
 export function sessionCostView(requests, lookup) {
-  let totalCostUsd = 0, priced = 0, unpricedRequests = 0, latestUsageSeq
+  let totalCostUsd = 0, inputCostUsd = 0, outputCostUsd = 0, cacheReadCostUsd = 0, cacheWriteCostUsd = 0, cacheSavingsUsd = 0
+  let totalInputWithCache = 0, totalCacheRead = 0
+  let priced = 0, unpricedRequests = 0, latestUsageSeq
   const unpricedModels = new Set()
   for (const request of Object.values(requests)) {
     if (request.seq !== undefined) latestUsageSeq = Math.max(latestUsageSeq ?? request.seq, request.seq)
-    const cost = requestCost(request, lookup)
-    if (cost === undefined) { unpricedRequests++; unpricedModels.add(request.model) }
-    else { totalCostUsd += cost; priced++ }
+    if (request.usage) {
+      totalInputWithCache += request.usage.inputTokens + request.usage.cacheReadTokens + request.usage.cacheWriteTokens
+      totalCacheRead += request.usage.cacheReadTokens
+    }
+    const breakdown = requestCostBreakdown(request, lookup)
+    if (breakdown === undefined) { unpricedRequests++; unpricedModels.add(request.model) }
+    else {
+      totalCostUsd += breakdown.total
+      inputCostUsd += breakdown.inputCostUsd
+      outputCostUsd += breakdown.outputCostUsd
+      cacheReadCostUsd += breakdown.cacheReadCostUsd
+      cacheWriteCostUsd += breakdown.cacheWriteCostUsd
+      cacheSavingsUsd += breakdown.cacheSavingsUsd
+      priced++
+    }
   }
-  return { usage: priced ? { totalCostUsd } : {}, cost: { source: 'publicPrice', unpricedRequests, unpricedModels: [...unpricedModels], readingComplete: true, ...(latestUsageSeq === undefined ? {} : { latestUsageSeq }) } }
+  const usage = priced ? {
+    totalCostUsd, inputCostUsd, outputCostUsd, cacheReadCostUsd, cacheWriteCostUsd,
+    ...(cacheSavingsUsd > 0 ? { cacheSavingsUsd } : {}),
+    ...(totalInputWithCache > 0 ? { sessionCacheHitRatePercent: (totalCacheRead / totalInputWithCache) * 100 } : {}),
+  } : {}
+  return { usage, cost: { source: 'publicPrice', unpricedRequests, unpricedModels: [...unpricedModels], readingComplete: true, ...(latestUsageSeq === undefined ? {} : { latestUsageSeq }) } }
 }
 
 export async function loadLocalPriceLookup(config = {}) {
@@ -55,8 +87,8 @@ export async function loadLocalPriceLookup(config = {}) {
   return new ModelPriceLookup(table, overrides)
 }
 
-export async function installSessionApiCost(ctx, config) {
-  const [{ z }, lookup] = await Promise.all([ctx.loader.import('zod'), loadLocalPriceLookup(config)])
+export async function installSessionApiCost(ctx, config, providedLookup) {
+  const [{ z }, lookup] = await Promise.all([ctx.loader.import('zod'), providedLookup ? Promise.resolve(providedLookup) : loadLocalPriceLookup(config)])
   const counter = z.number().int().nonnegative()
   const request = z.object({ id: z.string(), model: z.string(), provider: z.string(), seq: counter.optional(), usage: z.object({ inputTokens: counter, outputTokens: counter, cacheReadTokens: counter, cacheWriteTokens: counter }).optional() })
   const view = z.object({ usage: z.record(z.string(), z.number().finite().nonnegative()), cost: z.object({ source: z.literal('publicPrice'), unpricedRequests: counter, unpricedModels: z.array(z.string()), readingComplete: z.boolean(), latestUsageSeq: counter.optional() }) })

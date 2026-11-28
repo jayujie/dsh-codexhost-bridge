@@ -48,23 +48,34 @@ function recoveryConfirmation(value) {
   return input
 }
 
+function liveStatus(value) {
+  const result = object(value)
+  if (typeof result.active !== 'boolean') throw new TypeError('Invalid live status active flag')
+  if (!result.active) return result
+  if (!['codex', 'claude-code', 'antigravity'].includes(result.harnessId)) throw new TypeError('Invalid live status harness')
+  if (typeof result.phase !== 'string' || result.phase.length === 0 || result.phase.length > 64) throw new TypeError('Invalid live status phase')
+  if (typeof result.label !== 'string' || result.label.length > 256) throw new TypeError('Invalid live status label')
+  return result
+}
+
 const codec = (typeSymbol, parse) => ({ mode: 'strict', typeSymbol, create: () => ({ parse }) })
 const agentParameter = { name: 'agent', wire: 'agentId', source: 'lookup', lookup: 'agent', codec: codec('@deepseek-ai/dsh-session/types#SessionId', string) }
 const descriptor = (method, parameters, result) => ({
-  id: `${REMOTE_PACKAGE}#codexHost/${method}`, service: 'codexHost', namespace: 'codexHost', method,
+  id: `${REMOTE_PACKAGE}#dshHost/${method}`, service: 'dshHost', namespace: 'dshHost', method,
   invocation: { kind: 'direct' }, parameters: [agentParameter, ...parameters], result,
 })
 
 export const nativeRemoteDescriptors = [
-  descriptor('catalog', [], codec('CodexHostCatalog', catalog)),
-  descriptor('delegationTargets', [], codec('CodexHostDelegationTargets', delegationTargets)),
-  descriptor('recovery', [], codec('CodexHostRecovery', recovery)),
-  descriptor('reconcile', [{ name: 'confirmation', wire: 'confirmation', source: 'json', codec: codec('CodexHostRecoveryConfirmation', recoveryConfirmation) }], codec('CodexHostRecovery', recovery)),
+  descriptor('catalog', [], codec('DshHostCatalog', catalog)),
+  descriptor('delegationTargets', [], codec('DshHostDelegationTargets', delegationTargets)),
+  descriptor('recovery', [], codec('DshHostRecovery', recovery)),
+  descriptor('liveStatus', [], codec('DshHostLiveStatus', liveStatus)),
+  descriptor('reconcile', [{ name: 'confirmation', wire: 'confirmation', source: 'json', codec: codec('DshHostRecoveryConfirmation', recoveryConfirmation) }], codec('DshHostRecovery', recovery)),
   descriptor('selectAgent', [{ name: 'harnessId', wire: 'harnessId', source: 'json', codec: codec('HarnessId', value => {
     if (!['codex', 'claude-code', 'antigravity', 'deepseek-harness'].includes(value)) throw new TypeError('Unsupported Agent')
     return value
   }) }], codec('AgentPreset', string)),
-  descriptor('configure', [{ name: 'configuration', wire: 'configuration', source: 'json', codec: codec('HarnessConfiguration', configuration) }], codec('CodexHostCatalog', catalog)),
+  descriptor('configure', [{ name: 'configuration', wire: 'configuration', source: 'json', codec: codec('HarnessConfiguration', configuration) }], codec('DshHostCatalog', catalog)),
 ]
 
 export const nativeRemoteContribution = { package: REMOTE_PACKAGE, descriptors: nativeRemoteDescriptors }

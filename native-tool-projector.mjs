@@ -50,7 +50,7 @@ export class NativeToolProjector {
     const args = item.arguments ?? (item.type === 'commandExecution' ? { command: item.command, ...(item.cwd ? { workdir: item.cwd } : {}) }
       : item.type === 'fileChange' ? { description: item.changes?.map(change => change.path).join(', '), changes: item.changes } : item)
     if (!call) {
-      call = { id: `codexhost:${this.#position.turn}:${id}`, ended: false, item }
+      call = { id: `dsh-host:${this.#position.turn}:${id}`, ended: false, item }
       this.#calls.set(id, call)
       const argumentsRaw = typeof args === 'string' ? args : JSON.stringify(args)
       // Released DSH V4 requires the assistant's advertised call before execution.
@@ -73,7 +73,7 @@ export class NativeToolProjector {
     call.ended = true
     this.#session.append('tool/result', { ...this.#position,
       message: this.#helpers.createToolResultMessage({ callId: call.id, content: [{ type: 'text', text }], isError }),
-      meta: { codexHost: { harness: this.#harness, item: compactToolItemMeta(item) } },
+      meta: { dshHost: { harness: this.#harness, item: compactToolItemMeta(item) } },
     }, { surfaceOp: 'append' })
   }
 

@@ -3,13 +3,32 @@ import { consoleRemoteContribution } from './console-contract.mjs'
 import { AGENT_ICONS } from './icons.mjs'
 import { Button as DshConsoleButton } from '@deepseek-ai/dsh-client-ui-primitives'
 
-export const CONSOLE_PANEL_ID = 'codexhost-console'
+export const CONSOLE_PANEL_ID = 'dsh-host-console'
 export function installConsoleClient(ctx, t) {
   ctx.effect(async () => await ctx.remote.$mount(consoleRemoteContribution))
-  ctx.inject(['remote.codexHostConsole', 'uiWorkspace'], scope => {
-    scope.remoteAccess.whenAccess('codexHostConsole/bootstrap', function* () {
+  ctx.inject(['remote.dshHostConsole', 'uiWorkspace'], scope => {
+    scope.remoteAccess.whenAccess('dshHostConsole/bootstrap', function* () {
+      const openSession = async (sessionId, meta) => {
+        if (!sessionId) return
+        if (meta?.unarchived === true && typeof scope.uiWorkspace?.unarchiveSession === 'function') {
+          await scope.uiWorkspace.unarchiveSession(sessionId).catch(() => {})
+        }
+        const workspaces = scope.get?.('workspaces')
+        if (workspaces && meta?.cwd) {
+          const snap = workspaces.list?.getSnapshot?.()
+          const known = snap?.items?.find(item => item.workspaceId === meta.workspaceId)
+          if (!known || !known.sessionIds?.includes(sessionId)) {
+            await workspaces.create?.({ path: meta.cwd }).catch(() => {})
+          }
+        }
+        const sessions = scope.get?.('sessions')
+        if (sessions && !sessions.list?.getSnapshot?.()?.byId?.[sessionId]) {
+          await sessions.refreshList?.().catch(() => {})
+        }
+        await scope.uiWorkspace.openSession(sessionId)
+      }
       yield scope.slots.inject('main', () => scope.slots.register({ name: 'main', key: CONSOLE_PANEL_ID,
-        inject: () => ({ consoleRemote: scope.remote.codexHostConsole, openSession: id => scope.uiWorkspace.openSession(id), t }),
+        inject: () => ({ consoleRemote: scope.remote.dshHostConsole, openSession, t }),
       }, ConsolePanel))
       yield scope.slots.inject('sidebar.footer.action', () => scope.slots.register({ name: 'sidebar.footer.action', id: CONSOLE_PANEL_ID, order: 100,
         inject: () => ({ openConsole: () => scope.layout.selectPanel(CONSOLE_PANEL_ID), t }),
@@ -250,13 +269,23 @@ function DhCredits({ credits }) {
     ]))
 }
 
+function dhImportSummary(item) {
+  const notes = []
+  if (item.workspaceCreated) notes.push('已新建工作区')
+  if (item.unarchived) notes.push('已从归档恢复')
+  else if (item.reused) notes.push('已定位到已有会话')
+  const target = item.workspaceTitle || item.cwd
+  const suffix = [target ? `工作区：${target}` : '', ...notes].filter(Boolean).join(' · ')
+  return suffix ? `已导入：${item.title}（${suffix}）` : `已导入：${item.title}`
+}
+
 function DhImports({ remote, openSession }) {
   const [agent, setAgent] = useState('codex'), [query, setQuery] = useState(''), [search, setSearch] = useState(''), [page, setPage] = useState({}), [selected, setSelected] = useState(null), [idle, setIdle] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [imported, setImported] = useState(null)
   const operation = useRef(false)
   const [s, reload] = useConsoleData(remote, { action: 'sessions', harnessId: agent, query: search, ...page })
   const choose = id => { setAgent(id); setPage({}); setSelected(null); setIdle(false); setError('') }
-  const reopen = async id => {
-    try { await openSession(id); setSelected(null) }
+  const reopen = async target => {
+    try { await openSession(target.sessionId, target); setSelected(null) }
     catch (e) { setError(`会话已导入，但打开失败：${e.message}。请点击「打开已导入会话」重试，无需再次导入。`) }
   }
   const startImport = async () => {
@@ -264,14 +293,15 @@ function DhImports({ remote, openSession }) {
     operation.current = true; setBusy(true); setError('')
     try {
       const r = dhReply(await remote.request({ action: 'import', harnessId: agent, kind: selected.kind, id: selected.id, acknowledgeIdle: idle }))
-      setImported({ sessionId: r.sessionId, title: selected.title }); setSelected(null)
-      await reopen(r.sessionId)
+      const nextImported = { sessionId: r.sessionId, title: selected.title, workspaceId: r.workspaceId, workspaceTitle: r.workspaceTitle, cwd: r.cwd ?? selected.cwd, workspaceCreated: r.workspaceCreated === true, reused: r.reused === true, unarchived: r.unarchived === true }
+      setImported(nextImported); setSelected(null)
+      await reopen(nextImported)
     } catch (e) { setError(e.message) } finally { operation.current = false; setBusy(false) }
   }
   const retryOpen = async () => {
     if (operation.current || !imported) return
     operation.current = true; setBusy(true); setError('')
-    try { await reopen(imported.sessionId) } finally { operation.current = false; setBusy(false) }
+    try { await reopen(imported) } finally { operation.current = false; setBusy(false) }
   }
   return h('div', null,
     h('div', { className: 'dh-section-title' }, h('div', null, h('h2', null, '会话导入'), h('p', { className: 'dh-sub' }, '保留原工作目录、标题、消息和工具历史，导入后在 DSH 中直接续聊')), dhButton('刷新', reload, { disabled: s.loading || busy })),
@@ -281,10 +311,11 @@ function DhImports({ remote, openSession }) {
         h('input', { 'aria-label': '搜索会话', value: query, placeholder: '搜索原生会话标题或路径…', onChange: e => setQuery(e.target.value), disabled: busy }),
         h('button', { type: 'submit', className: 'dh-search-btn', disabled: s.loading || busy }, '搜索'))),
     dhFeedback(s), error ? h('div', { className: 'dh-feedback dh-error', role: 'alert' }, error) : null,
-    imported ? h('div', { className: 'dh-import-result', role: 'status' }, h('span', null, `已导入：${imported.title}`), dhButton('打开已导入会话', retryOpen, { disabled: busy })) : null,
+    imported ? h('div', { className: 'dh-import-result', role: 'status' }, h('span', { title: imported.cwd || undefined }, dhImportSummary(imported)), dhButton('打开已导入会话', retryOpen, { disabled: busy })) : null,
     selected ? h('section', { className: 'dh-import-confirm', 'aria-label': '确认导入会话' },
       h('div', { className: 'dh-confirm-head' }, h('span', { className: 'dh-tag dh-tag-accent' }, '即将导入'), h('strong', null, selected.title)),
       h('p', { className: 'dh-path dh-mono' }, selected.cwd),
+      h('p', { className: 'dh-sub' }, '将按原工作目录归入对应工作区（若尚无此工作区则自动新建；若会话已归档则自动恢复）。'),
       h('label', { className: 'dh-check' }, h('input', { type: 'checkbox', checked: idle, onChange: e => setIdle(e.target.checked), disabled: busy }), '我已停止原客户端中的此会话，避免两边同时写入'),
       h('div', { className: 'dh-actions' }, dhButton(busy ? '正在导入…' : '导入到 DSH 并打开', startImport, { className: 'dh-primary', disabled: !idle || busy }), dhButton('取消', () => setSelected(null), { disabled: busy }))) : null,
     s.data && !s.loading ? h('div', { className: 'dh-session-list' }, s.data.rows.length ? s.data.rows.map(row =>
@@ -356,7 +387,7 @@ function DhUsage({ remote }) {
                 h('td', null, dhAgent(r.harness)),
                 ...[r.inputTokens, r.cachedInputTokens, r.cacheWriteInputTokens, r.outputTokens].map((n, i) => h('td', { key: i }, dhNum(n))),
                 h('td', { className: 'dh-td-money' }, dhMoney(r.costUsd))))))))) : null,
-    h('p', { className: 'dh-note' }, '金额复用原 Host 的 API 单价与缓存计价。未计价请求不计入美元总额。这里显示原生 Agent 的记录，不会额外调用模型。'),
+    h('p', { className: 'dh-note' }, '金额复用 DSH Host 的 API 单价与缓存计价。未计价请求不计入美元总额。这里显示原生 Agent 的记录，不会额外调用模型。'),
     h(DhPrices, { remote, onSaved: reload }))
 }
 
@@ -364,7 +395,7 @@ function DhPrices({ remote, onSaved }) {
   const [s, reload] = useConsoleData(remote, { action: 'prices' }), [model, setModel] = useState(''), [price, setPrice] = useState({}), [previousKey, setPreviousKey] = useState(null), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const fields = [['input', '输入'], ['output', '输出'], ['cacheRead', '缓存读取'], ['cacheWrite', '缓存写入（5 分钟）'], ['cacheWrite1h', '缓存写入（1 小时）']]
   const validPrice = ['input', 'output'].every(key => price[key] !== undefined && price[key] !== '') && fields.every(([key]) => price[key] === undefined || price[key] === '' || (Number.isFinite(Number(price[key])) && Number(price[key]) >= 0))
-  const lookup = async () => { setBusy(true); setMessage(''); try { const r = dhReply(await remote.request({ action: 'priceDefault', model: model.trim() })); setPrice(r.price ?? {}); setMessage(r.price ? '已读取原 Host 默认单价。' : '原 Host 没有此模型的默认单价，请填写自定义单价。') } catch (e) { setMessage(e.message) } finally { setBusy(false) } }
+  const lookup = async () => { setBusy(true); setMessage(''); try { const r = dhReply(await remote.request({ action: 'priceDefault', model: model.trim() })); setPrice(r.price ?? {}); setMessage(r.price ? '已读取 DSH Host 默认单价。' : 'DSH Host 没有此模型的默认单价，请填写自定义单价。') } catch (e) { setMessage(e.message) } finally { setBusy(false) } }
   const save = async remove => { setBusy(true); setMessage(''); try { const p = Object.fromEntries(fields.filter(([key]) => price[key] !== undefined && price[key] !== '').map(([key]) => [key, Number(price[key])]))
     dhReply(await remote.request({ action: 'priceSave', key: model.trim(), ...(previousKey ? { previousKey } : {}), price: remove ? null : p })); setMessage(remove ? '已恢复默认单价。' : 'API 单价已保存，统计将重新计算。'); setPreviousKey(remove ? null : model.trim()); reload(); onSaved() } catch (e) { setMessage(e.message) } finally { setBusy(false) } }
   return h('details', { className: 'dh-price-editor' },

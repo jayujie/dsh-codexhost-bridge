@@ -1,15 +1,16 @@
+import { hostRecord } from './host-identity.mjs'
 import { createServer } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { nativeModelSource } from './native-tool-projector.mjs'
 import { validateNativeBackgroundCall } from './native-background-bridge.mjs'
 
 export const COLLABORATION_TOOL = 'dsh_collaboration'
-export const COLLABORATION_SCHEMA = Object.freeze({ name: COLLABORATION_TOOL, description: 'Use the current DSH subagent tree and shared task board. Call name="__list__" with arguments={} to discover admitted tool schemas, then call an admitted tool by name. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent CodexHost child.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, arguments: { type: 'object', additionalProperties: true } }, required: ['name', 'arguments'], additionalProperties: false } })
+export const COLLABORATION_SCHEMA = Object.freeze({ name: COLLABORATION_TOOL, description: 'Use the current DSH subagent tree and shared task board. Call name="__list__" with arguments={} to discover admitted tool schemas, then call an admitted tool by name. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent dsh-host child.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, arguments: { type: 'object', additionalProperties: true } }, required: ['name', 'arguments'], additionalProperties: false } })
 const names = new Set(['subagent', 'list_host_subagent_models', 'list_subagent_models', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'])
 const allowed = name => names.has(name) || /^team_task_(create|list|get|update)$/.test(name)
 const failure = text => ({ isError: true, content: [{ type: 'text', text }] })
 // Returned on discovery, not appended to every native input or added to tool schemas.
-const COLLABORATION_INSTRUCTIONS = 'Use subagent for delegation. Set engine=codex, claude-code, or antigravity for external teammates, or omit engine for native DSH. Query list_host_subagent_models for external model and reasoning_effort ids; omit provider for external engines. Use list_agents, send_message, wait_agent, and interrupt_agent to discover, follow up with, and wait for named teammates. The standard tree, depth, scopes and current Team mode apply. Team mode does not require creating teammates or tasks. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent CodexHost child. When team_task_* tools are admitted, task owners are names from list_agents. Read current revisions before claim/update, partition write scopes, and respect dependencies. Task updates do not wake teammates; use send_message explicitly. Wait for required results before a final answer. Discover tools again when current capabilities are unknown; discovery itself starts no work.'
+const COLLABORATION_INSTRUCTIONS = 'Use subagent for delegation. Set engine=codex, claude-code, or antigravity for external teammates, or omit engine for native DSH. Query list_host_subagent_models for external model and reasoning_effort ids; omit provider for external engines. Use list_agents, send_message, wait_agent, and interrupt_agent to discover, follow up with, and wait for named teammates. The standard tree, depth, scopes and current Team mode apply. Team mode does not require creating teammates or tasks. Use DSH collaboration for shared DSH teammates; a separate Host delegation CLI creates an independent dsh-host child. When team_task_* tools are admitted, task owners are names from list_agents. Read current revisions before claim/update, partition write scopes, and respect dependencies. Task updates do not wake teammates; use send_message explicitly. Wait for required results before a final answer. Discover tools again when current capabilities are unknown; discovery itself starts no work.'
 
 function waitTimedOutFlag(result) {
   if (result?.value && typeof result.value.timedOut === 'boolean') return result.value.timedOut
@@ -51,7 +52,7 @@ export class HostCollaboration {
     const schemas = admitted()
     const lease = {
       schemas,
-      source: { kind: 'model', provider: 'codexhost/collaboration', model: 'tool-dispatch' },
+      source: { kind: 'model', provider: 'dsh-host/collaboration', model: 'tool-dispatch' },
       call: request => {
         if (closed || activeSignal.aborted) return Promise.reject(new Error('Collaboration Turn is no longer active'))
         if (!request || typeof request.id !== 'string' || !request.id || request.id.length > 1024 || typeof request.name !== 'string') return Promise.reject(new Error('Invalid collaboration request'))
@@ -62,7 +63,7 @@ export class HostCollaboration {
         try { signature = JSON.stringify([request.channel ?? 'collaboration', request.name, request.arguments]); if (Buffer.byteLength(signature) > 32000) throw new Error('Collaboration request is too large') } catch (error) { return Promise.reject(error) }
         const previous = requests.get(request.id)
         if (previous) return previous.signature === signature ? previous.promise : Promise.reject(new Error('Collaboration request ID conflict'))
-        const log = (phase, extra = {}) => this.helpers.appendPluginRecord(agent.session, 'plugin:codexhost/collaboration', { version: 1, turn, step, id: request.id, name: request.name, ...(background ? { channel: 'background' } : {}), phase, ...extra })
+        const log = (phase, extra = {}) => this.helpers.appendPluginRecord(agent.session, hostRecord('collaboration'), { version: 1, turn, step, id: request.id, name: request.name, ...(background ? { channel: 'background' } : {}), phase, ...extra })
         const flush = () => this.ctx.sessionPersistence.flush(agent.session)
         const promise = Promise.resolve().then(async () => {
           let call
@@ -169,6 +170,6 @@ export async function installCollaborationBridge(ctx, driver, helpers, options =
     } catch { if (!response.writableEnded) answer(200, failure('DSH collaboration tool denied or failed. Do not automatically replay mutations.')) }
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  ctx.effect(() => async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await manager.close() }, 'codexhost: collaboration bridge')
+  ctx.effect(() => async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await manager.close() }, 'dsh-host: collaboration bridge')
   return { manager, environment: { DSH_UNIFIED_WAKE: '1', DSH_COLLABORATION_URL: `http://127.0.0.1:${server.address().port}/collaboration`, DSH_COLLABORATION_TOKEN: token } }
 }

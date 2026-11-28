@@ -72,7 +72,7 @@ export async function installConsoleRemote(ctx, config, driver) {
   const console = new DshHostConsole(ctx, config, driver, Object.assign({}, ...modules))
   const initializers = []
   class ConsoleRemote extends TypertRemoteService {
-    constructor(scope) { super(scope, 'codexHostConsole'); for (const initialize of initializers) initialize.call(this) }
+    constructor(scope) { super(scope, 'dshHostConsole'); for (const initialize of initializers) initialize.call(this) }
     bootstrap() { assertConsoleOwner(this.ctx.invocation); return console.bootstrap() }
     request(request) { assertConsoleOwner(this.ctx.invocation); return console.request(request) }
   }

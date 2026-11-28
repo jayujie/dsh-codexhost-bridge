@@ -10,6 +10,7 @@ import { patchClaudeNetworkRetry } from './patch-claude-network-retry.mjs'
 import { patchClaudeCommands } from './patch-claude-commands.mjs'
 import { patchAntigravityPerf } from './patch-antigravity-perf.mjs'
 import { patchAntigravityCollaboration } from './patch-antigravity-collaboration.mjs'
+import { patchCodexLazyStart } from './patch-codex-lazy-start.mjs'
 import { patchedHostTools } from './patch-host-tools.mjs'
 import { patchedHostUsage } from './patch-host-usage.mjs'
 import { hostDataDirectory } from './backend-paths.mjs'
@@ -52,6 +53,7 @@ const PATCH_INPUT_FILES = [
   'patch-claude-commands.mjs',
   'patch-antigravity-perf.mjs',
   'patch-antigravity-collaboration.mjs',
+  'patch-codex-lazy-start.mjs',
   'live-token-usage.mjs',
   'keepalive-rpc-backend.txt',
   'title-rpc-backend.txt',
@@ -60,6 +62,7 @@ const PATCH_INPUT_FILES = [
   'native-background-bridge.mjs',
   'antigravity-collaboration.mjs',
   'antigravity-perf.mjs',
+  'antigravity-visibility.mjs',
   'claude-native-web.txt',
   'claude-collaboration-sdk.txt',
   'claude-title-sdk.txt',
@@ -199,7 +202,7 @@ export async function buildPatchedBackend({ sourceDir, outDir, useEsbuild = true
   runtime = replace(runtime, '    const record6 = await this.#repository.materializeSubagent(parent.record, subagent);\n    if (!record6) return subagent;', '    const record6 = await this.#repository.materializeSubagent(parent.record, subagent);\n    if (!record6) return subagent;\n    this.#dshNativeSubagents.set(parent.id + "\\u0000" + record6.hostThreadId, subagent.nativeSubagentId);', 'remember native ids of materialized subagents for task stop')
   runtime = replace(runtime, '        this.#detached.add(event.itemId);\n        return { messages: [] };', '        this.#detached.add(event.itemId);\n        return { messages: [{ method: "codexhost/item/detached", emittedAtMs, params: { threadId: this.#threadId, turnId: this.#turnId, itemId: event.itemId } }] };', 'announce command Items that continue as background tasks')
   runtime = replace(runtime, '  async #requestOfficial(method, params) {\n    if (this.#options.externalOnly) {', '  async #requestOfficial(method, params) {\n    if (this.#options.externalOnly || this.#options.delegationOnly) {', 'initialize the headless delegation connection before official Thread reads')
-  runtime = replace(runtime, 'codex_approval_kind: "mcp_tool_call",', 'codex_approval_kind: "mcp_tool_call",\n          codexhostScope: { title: interaction.title, description: interaction.description, subject: interaction.subject },', 'preserve complete native approval scope for DSH review')
+  runtime = replace(runtime, 'codex_approval_kind: "mcp_tool_call",', 'codex_approval_kind: "mcp_tool_call",\n          dshHostScope: { title: interaction.title, description: interaction.description, subject: interaction.subject },', 'preserve complete native approval scope for DSH review')
   runtime = replace(runtime, 'isSecret: question.secret,', 'isSecret: question.secret,\n        isOptional: question.optional,', 'preserve native text question optionality')
   runtime = replace(runtime, 'isOther: question.allowOther,', 'isOther: question.allowOther,\n      multiSelect: question.multiple,\n      isOptional: question.optional,', 'preserve native choice multiplicity and optionality')
   runtime = replace(runtime, 'function remoteControlBridgeDescriptorPath(environment) {', `function remoteControlBridgeDescriptorPath(environment) {
@@ -224,6 +227,12 @@ export async function buildPatchedBackend({ sourceDir, outDir, useEsbuild = true
     changes.push(`remove ${name} implementation`)
   }
   runtime = runtime.replaceAll('Restart Codex Desktop', 'Restart DSH').replaceAll('restart Codex Desktop', 'restart DSH')
+  runtime = replace(runtime, 'const error51 = new Error(`codexhost Remote Control bridge: ${message2}`);', 'const error51 = new Error(`dsh-host Remote Control bridge: ${message2}`);', 'rebrand remote control bridge error to dsh-host')
+  runtime = replace(runtime, 'title: "codexhost Remote Control bridge",', 'title: "dsh-host Remote Control bridge",', 'rebrand remote control bridge title to dsh-host')
+  runtime = replace(runtime, '`[codexhost delegation] The user mentioned ${describeTargets(mentions)}.`,', '`[dsh-host delegation] The user mentioned ${describeTargets(mentions)}.`,', 'rebrand delegation preamble to dsh-host')
+  runtime = replace(runtime, 'throw new MappingStoreError("STORE_LOCKED", "Another codexhost process owns Mapping Store");', 'throw new MappingStoreError("STORE_LOCKED", "Another dsh-host process owns Mapping Store");', 'rebrand mapping store lock error to dsh-host')
+  runtime = replace(runtime, 'rpcError(request, -32603, "codexhost could not handle the request")', 'rpcError(request, -32603, "dsh-host could not handle the request")', 'rebrand fallback rpc error to dsh-host')
+  runtime = patchCodexLazyStart(runtime, replace)
   const start = runtime.indexOf('async function runHostRuntime(input) {')
   const end = runtime.indexOf('// packages/host-runtime/src/remote-host-install.ts', start)
   if (start < 0 || end < 0) throw new Error('Runtime entry boundaries changed')
@@ -302,9 +311,19 @@ process.exitCode = arguments_[0] === "--codexhost-delegation-cli" ? await runDel
         const backgroundSdk = (await readFile(path.join(ROOT, 'native-background-bridge.mjs'), 'utf8')).replace(/^export /gm, '')
         const agyCollab = (await readFile(path.join(ROOT, 'antigravity-collaboration.mjs'), 'utf8')).replace(/^import .*native-background-bridge\.mjs['"];?\r?\n/gm, '').replace(/^export /gm, '')
         const agyPerf = (await readFile(path.join(ROOT, 'antigravity-perf.mjs'), 'utf8')).replace(/^export /gm, '')
-        plugin = backgroundSdk + '\n' + agyCollab + '\n' + agyPerf + '\n' + plugin
+        const agyVisibility = (await readFile(path.join(ROOT, 'antigravity-visibility.mjs'), 'utf8')).replace(/^export /gm, '')
+        plugin = backgroundSdk + '\n' + agyCollab + '\n' + agyPerf + '\n' + agyVisibility + '\n' + plugin
         plugin = patchAntigravityPerf(plugin, replace)
         plugin = patchAntigravityCollaboration(plugin, replace)
+        plugin = replace(plugin, 'description: "使用 --dangerously-skip-permissions 运行 Antigravity CLI；codexhost 不增加工具审批或工作区限制。"', 'description: "使用 --dangerously-skip-permissions 运行 Antigravity CLI；dsh-host 不增加工具审批或工作区限制。"', 'rebrand Antigravity zh permission description to dsh-host')
+        plugin = replace(plugin, 'description: "Run Antigravity CLI with --dangerously-skip-permissions. codexhost adds no tool approval or workspace restrictions.",', 'description: "Run Antigravity CLI with --dangerously-skip-permissions. dsh-host adds no tool approval or workspace restrictions.",', 'rebrand Antigravity en permission description to dsh-host')
+        plugin = replace(plugin, 'throw new Error("Antigravity only supports Skip permissions (dangerous). Explicitly select Skip permissions to continue; codexhost does not enforce tool permissions.");', 'throw new Error("Antigravity only supports Skip permissions (dangerous). Explicitly select Skip permissions to continue; dsh-host does not enforce tool permissions.");', 'rebrand Antigravity permission error to dsh-host')
+        plugin = replace(plugin, 'reason: "codexhost question bridge is unavailable. No user answer was received. Do not report that the user skipped or selected an option."', 'reason: "dsh-host question bridge is unavailable. No user answer was received. Do not report that the user skipped or selected an option."', 'rebrand Antigravity question bridge unavailable message to dsh-host')
+        plugin = replace(plugin, 'deny(response, "This question does not belong to the active codexhost Turn. No answer was received.");', 'deny(response, "This question does not belong to the active dsh-host Turn. No answer was received.");', 'rebrand Antigravity stale question message to dsh-host')
+        plugin = replace(plugin, 'deny(response, "codexhost currently supports single-choice or text questions, not multi-select. Ask separate single-choice questions instead.");', 'deny(response, "dsh-host currently supports single-choice or text questions, not multi-select. Ask separate single-choice questions instead.");', 'rebrand Antigravity multi-select message to dsh-host')
+        plugin = replace(plugin, 'const reason = "codexhost handled this question through the Desktop. Native ask_question is blocked only to prevent automatic skipping. The following JSON contains the actual user response, not a tool permission decision: " + JSON.stringify(result);', 'const reason = "dsh-host handled this question through DSH Desktop. Native ask_question is blocked only to prevent automatic skipping. The following JSON contains the actual user response, not a tool permission decision: " + JSON.stringify(result);', 'rebrand Antigravity question response reason to dsh-host')
+        plugin = replace(plugin, 'For clarification, ask_question is connected to the codexhost Desktop through a Hook.', 'For clarification, ask_question is connected to DSH Desktop through a Hook.', 'rebrand Antigravity workspace instruction to DSH Desktop')
+        plugin = replace(plugin, 'codexhost uses native Skip permissions and does not enforce tool permissions.', 'dsh-host uses native Skip permissions and does not enforce tool permissions.', 'rebrand Antigravity permission denial error to dsh-host')
       }
       if (id === 'claude-code') {
         const webSdk = await readFile(path.join(ROOT, 'claude-native-web.txt'), 'utf8')
@@ -438,6 +457,8 @@ process.exitCode = arguments_[0] === "--codexhost-delegation-cli" ? await runDel
         plugin = replace(plugin, 'supportedThinkingOptionIds: [...CLAUDE_THINKING_OPTION_IDS]', 'supportedThinkingOptionIds: dshClaudeThinkingOptionIds(row)', 'do not advertise unverified Claude effort levels')
         plugin = replace(plugin, '          CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT,', '          CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT,\n          CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",', 'disable Claude CLI automatic titles without changing client identity')
         plugin = replace(plugin, '    return $n("sdk_session_title_generate", async () => (await this.request({ subtype: "generate_session_title", description: e, persist: t?.persist })).response.title);', '    // Main transport never generates titles; DSH uses an isolated title-only child.\n    return null;', 'disable explicit SDK title requests')
+        plugin = replace(plugin, 'set IS_SANDBOX=1 for the codexhost Host and restart it', 'set IS_SANDBOX=1 for the dsh-host Host and restart it', 'rebrand Claude root sandbox error to dsh-host')
+        plugin = replace(plugin, 'set IS_SANDBOX=1 for the codexhost Host, restart it, and reopen the Session', 'set IS_SANDBOX=1 for the dsh-host Host, restart it, and reopen the Session', 'rebrand Claude session sandbox error to dsh-host')
       }
       if (id === 'deepseek-harness') {
         const cut = plugin.indexOf('// dist/harness-commands.js')
@@ -461,7 +482,7 @@ process.exitCode = arguments_[0] === "--codexhost-delegation-cli" ? await runDel
     const buildManifest = {
       sourceRuntimeSha256: RUNTIME_PIN,
       adapterPins: ADAPTER_PINS,
-      builtFrom: `local patched CodexHost ${CODEXHOST_VERSION}`,
+      builtFrom: `dsh-host (secondary development based on CodexHost ${CODEXHOST_VERSION})`,
       buildTool: esbuild?.build ? `esbuild ${esbuild.version ?? 'bundled'}` : `node ${process.versions.node} (pure-esm)`,
       changes,
       dshAdapter: 'usage-only; no reverse DSH execution',

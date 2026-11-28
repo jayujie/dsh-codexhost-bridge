@@ -221,21 +221,21 @@ test('import list resolves real DSH titles for unnamed Codex threads and trims o
   const owners = new Map([['t-dsh', codex('t-dsh')], ['t-raw', codex('t-raw')]])
   const peer = listPeer({
     data: [
-      { id: 't-dsh', name: null, preview: longPrompt, cwd: '\\\\?\\D:/work\\TMC', updatedAt: 2, status: { type: 'idle' } },
-      { id: 't-raw', name: null, preview: longPrompt, cwd: 'D:/work\\TMC', updatedAt: 1, status: { type: 'idle' } },
+      { id: 't-dsh', name: null, preview: longPrompt, cwd: '\\\\?\\D:\\Desktop\\TMC', updatedAt: 2, status: { type: 'idle' } },
+      { id: 't-raw', name: null, preview: longPrompt, cwd: 'D:\\Desktop\\TMC', updatedAt: 1, status: { type: 'idle' } },
     ],
     nextCursor: null,
   }, owners)
   const ctx = {
     agents: { list: () => [] },
     sessionPersistence: {
-      async list() { return [{ header: { id: 'session-hosttask-1', cwd: 'D:/work\\TMC' }, revision: 'rev-1' }] },
+      async list() { return [{ header: { id: 'session-hosttask-1', cwd: 'D:\\Desktop\\TMC' }, revision: 'rev-1' }] },
       async open() {
         return {
           async read() {
             return {
               events: [
-                { type: 'plugin:codexhost/thread', ignorable: true, data: { version: 1, phase: 'ready', harnessId: 'codex', threadId: 't-dsh', sessionId: 'session-hosttask-1' } },
+                { type: 'plugin:dsh-host/thread', ignorable: true, data: { version: 1, phase: 'ready', harnessId: 'codex', threadId: 't-dsh', sessionId: 'session-hosttask-1' } },
                 { type: 'session/title', data: { title: 'TMC·长期实验实现与仿真（executor-sol）', source: { kind: 'user' } } },
               ],
             }

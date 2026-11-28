@@ -35,8 +35,8 @@ export function parseConsoleRequest(v) {
 }
 const codec = (typeSymbol, parse) => ({ mode: 'strict', typeSymbol, create: () => ({ parse }) })
 const object = v => { if (!v || typeof v !== 'object' || Array.isArray(v)) throw new TypeError('Expected console response'); return v }
-const descriptor = (method, parameters) => ({ id: `${CONSOLE_REMOTE_PACKAGE}#codexHostConsole/${method}`,
-  service: 'codexHostConsole', namespace: 'codexHostConsole', method, invocation: { kind: 'direct' }, parameters,
+const descriptor = (method, parameters) => ({ id: `${CONSOLE_REMOTE_PACKAGE}#dshHostConsole/${method}`,
+  service: 'dshHostConsole', namespace: 'dshHostConsole', method, invocation: { kind: 'direct' }, parameters,
   result: codec('DshHostConsoleResponse', object),
 })
 export const consoleRemoteDescriptors = [descriptor('bootstrap', []), descriptor('request', [{ name: 'request', wire: 'request', source: 'json', codec: codec('DshHostConsoleRequest', parseConsoleRequest) }])]

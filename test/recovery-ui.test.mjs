@@ -22,16 +22,16 @@ function mount(directory) {
 test('outcome recovery sits in the left composer group for external engines only', () => {
   const h = (type, props, ...children) => ({ type, props, children })
   const { NativeAgentControls, NativeLeftControls, NativeRecoveryControl, QuotaResumeControl } = vm.runInNewContext(source + '\n;({ NativeAgentControls, NativeLeftControls, NativeRecoveryControl, QuotaResumeControl })', {
-    h, AGENT_ICONS: {}, DelegationPicker() {}, useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
+    h, AGENT_ICONS: {}, DelegationPicker() {}, useRef: value => ({ current: value }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
   })
-  const hostDirectory = { subscribe() {}, getSnapshot: () => ({ status: 'error' }) }
+  const hostDirectory = { subscribe() {}, getSnapshot: () => ({ status: 'error' }), modelStore: { getSnapshot: () => null } }
   const hooks = (preset, summary, quota) => ({ sessionId: 'test', hostDirectory, useProjection: key => key === 'agentPreset' ? preset : quota,
     useSessions: select => select({ byId: { test: summary } }), useSession: select => select({ subagent: null, pendingSubmissions: [] }), useInput: select => select({}), t: key => key })
   function control(preset, summary) {
     const tree = NativeLeftControls(hooks(preset, summary))
     return tree?.children.find(child => child?.type === NativeRecoveryControl)
   }
-  for (const preset of ['codexhost-claude-code', 'codexhost-codex']) {
+  for (const preset of ['dsh-host-claude-code', 'dsh-host-codex']) {
     assert.equal(control(preset, {}).props.hostDirectory, hostDirectory)
     assert.equal(control(preset, {}).props.disabled, false)
     assert.equal(control(preset, { running: true }).props.disabled, true)
@@ -42,9 +42,9 @@ test('outcome recovery sits in the left composer group for external engines only
   assert.equal(control('deepseek-harness', {}), undefined)
   const paused = { streak: 1, paused: { turn: 1, resetAt: 1, failedAt: 0, seq: 9 } }
   const quotaOf = preset => NativeLeftControls(hooks(preset, {}, paused)).children.find(child => child?.type === QuotaResumeControl)
-  assert.equal(quotaOf('codexhost-claude-code').props.quota, paused)
-  assert.equal(quotaOf('codexhost-codex'), undefined, 'Quota resume is Claude-only')
-  assert.equal(NativeLeftControls(hooks('codexhost-claude-code', {})).children.some(child => child?.type === QuotaResumeControl), false)
+  assert.equal(quotaOf('dsh-host-claude-code').props.quota, paused)
+  assert.equal(quotaOf('dsh-host-codex'), undefined, 'Quota resume is Claude-only')
+  assert.equal(NativeLeftControls(hooks('dsh-host-claude-code', {})).children.some(child => child?.type === QuotaResumeControl), false)
 })
 
 test('recovery dialog requires acknowledgement and prevents duplicate commit', async () => {

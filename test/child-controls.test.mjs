@@ -9,12 +9,12 @@ function fixture({owner = 'deepseek-harness', addressed = true, listed = false, 
   const loads = [], state = {status: 'error', error: 'ordinary Agent RPC cannot address this child', catalog: null}
   const h = (tag, props, ...children) => ({tag, props, children})
   const api = vm.runInNewContext(source + '\n;({NativeAgentControls,ChildAgentIdentity,PermissionSeat,hostModelSnapshot,zh})', {
-    h, hostModelPresentation, useState: initial => [initial, () => {}], useEffect: fn => fn(), useSyncExternalStore: (_subscribe, get) => get(),
+    h, hostModelPresentation, useState: initial => [initial, () => {}], useRef: value => ({ current: value }), useEffect: fn => fn(), useSyncExternalStore: (_subscribe, get) => get(),
     AGENT_ICONS: {codex: 'codex', 'claude-code': 'claude', antigravity: 'agy', 'deepseek-harness': 'dsh'}, DelegationPicker() {},
     Menu() {}, RiskConfirmation() {}, IconChevronDownOutlineRegular() {},
   })
-  const props = {sessionId: 'child', hostDirectory: {subscribe() {}, getSnapshot: () => state, load: preset => loads.push(preset)},
-    useProjection: key => key === 'agentPreset' ? owner === 'deepseek-harness' ? 'research-lite' : 'codexhost-' + owner : key === 'modelSelection' ? selection : key === 'codexHostObservation' ? observation : key === 'codexHostModelIdentity' ? identity : undefined,
+  const props = {sessionId: 'child', hostDirectory: {subscribe() {}, getSnapshot: () => state, modelStore: { getSnapshot: () => null }, load: preset => loads.push(preset)},
+    useProjection: key => key === 'agentPreset' ? owner === 'deepseek-harness' ? 'research-lite' : 'codexhost-' + owner : key === 'modelSelection' ? selection : key === 'dshHostObservation' ? observation : key === 'dshHostModelIdentity' ? identity : undefined,
     useSession: select => select({subagent: addressed ? {parentSessionId: 'parent'} : null}),
     useSessions: select => select({byId: {child: {origin: listed ? 'subagent' : 'user', running: false, blank: false}}}),
     useInput: select => select({phase: 'plain'}), t: key => api.zh[key] ?? key,

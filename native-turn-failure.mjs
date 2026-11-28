@@ -1,4 +1,5 @@
-export const HOST_TURN_FAILURE = 'plugin:codexhost/turn-failure'
+import { hostRecord } from './host-identity.mjs'
+export const HOST_TURN_FAILURE = hostRecord('turn-failure')
 
 /** Keep only bounded diagnostics, never raw transport error objects or credentials. */
 export function observedTurnFailure(error) {

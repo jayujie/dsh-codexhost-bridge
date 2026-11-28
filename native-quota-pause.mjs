@@ -1,7 +1,7 @@
 // Recognize the gateway's five-hour quota rejection that the Claude CLI records as a
 // synthetic "API Error: 503 ..." assistant message, and expose its announced reset
 // time. Read-only fold: it never sends anything; the client decides whether to resume.
-export const QUOTA_PAUSE_KEY = 'codexHostQuotaPause'
+export const QUOTA_PAUSE_KEY = 'dshHostQuotaPause'
 
 const QUOTA_MARK = /五小时(?:用量|额度)/u
 const RESET_AT = /预计最早重置[：:]\s*北京时间\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?/u
@@ -32,7 +32,7 @@ export function foldQuotaPause(state, event) {
     if (!current.paused && !current.candidate) return state
     return { streak: current.streak }
   }
-  if (event?.type === 'assistant/message' && data?.message?.source?.provider === 'codexhost/claude-code') {
+  if (event?.type === 'assistant/message' && ['dsh-host/claude-code', 'codexhost/claude-code'].includes(data?.message?.source?.provider)) {
     const parsed = parseQuotaReset(textOf(data.message))
     if (!parsed) return state
     return { streak: current.streak, candidate: { turn: data.turn, ...(parsed.resetAt === undefined ? {} : { resetAt: parsed.resetAt }), failedAt: event.time, seq: event.seq } }

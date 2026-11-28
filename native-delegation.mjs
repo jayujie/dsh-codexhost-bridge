@@ -1,9 +1,10 @@
+import { hostRecord, isHostRecord } from './host-identity.mjs'
 import { createHash } from 'node:crypto'
 import { EXTERNAL_ENGINE_IDS, EXTERNAL_PRESET_IDS, presetForEngine } from './external-engines.mjs'
 import { selectedDelegationTargets } from './delegation-mentions.mjs'
 import { HOST_TURN_FAILURE, observedTurnFailure } from './native-turn-failure.mjs'
 
-const TASK_RECORD = 'plugin:codexhost/native-task'
+const TASK_RECORD = hostRecord('native-task')
 export const NATIVE_DELEGATION_TOOL = 'dsh_host_task'
 export const HOST_SUBAGENT_TOOL = 'subagent_host'
 const nativeTargets = [...EXTERNAL_ENGINE_IDS, 'deepseek-harness']
@@ -24,7 +25,7 @@ export function encodeNativeTaskResult(result) {
 }
 export function nativeTaskRecords(session) {
   const rows = new Map()
-  for (const event of session.snapshotEvents()) if (event.type === TASK_RECORD && event.ignorable === true && event.data?.version === 1 && event.data.parentSessionId === session.id) rows.set(event.data.taskId, event.data)
+  for (const event of session.snapshotEvents()) if (isHostRecord(event.type, 'native-task') && event.ignorable === true && event.data?.version === 1 && event.data.parentSessionId === session.id) rows.set(event.data.taskId, event.data)
   return rows
 }
 function currentUserTargets(session) {
@@ -36,14 +37,14 @@ export function nativeDelegationInstruction(targets) {
   return `[DSH Host delegation]\n用户明确选择了独立委派目标：${targets.join(', ')}。当前主 Agent 不变。\n` +
     `使用 subagent，为每个目标设置对应 engine 并提供自包含 prompt。外部 model 和 reasoning_effort 先用 list_host_subagent_models 查询；外部引擎不填 provider。` +
     `返回的 name 用于 list_agents、send_message 和已启用的团队任务板；等待实际完成通知再汇报结果。` +
-    `Codex 子代理默认工作区内修改权限（workspace-write），Claude 与 Antigravity 子代理默认完全权限（无需审批）。不要使用 codexhost delegate CLI 或另一套 Host 委派，也不要复制运行时 token。`
+    `Codex 子代理默认工作区内修改权限（workspace-write），Claude 与 Antigravity 子代理默认完全权限（无需审批）。不要使用独立的 dsh-host delegate CLI 或另一套 Host 委派，也不要复制运行时 token。`
 }
 
 /** Resolve a native target from the tree root, never another external execution preset. */
 export function nativeTargetPreset(ctx, driver, parent) {
   const root = ctx.subagents.rootOf(parent)
   const current = ctx.agentPresets.presetForSession(root.session)
-  const original = root.session.snapshotEvents().findLast(event => event.type === 'plugin:codexhost/original-preset' && event.ignorable === true)?.data.preset
+  const original = root.session.snapshotEvents().findLast(event => isHostRecord(event.type, 'original-preset') && event.ignorable === true)?.data.preset
   const preset = driver.owner(root) ? original ?? ctx.agentPresets.defaultId : current ?? ctx.agentPresets.defaultId
   if (!preset || EXTERNAL_PRESET_IDS.includes(preset)) throw new Error('A native DSH preset is required for this target')
   return preset
@@ -97,7 +98,8 @@ export class NativeDelegation {
         if (!model) throw new Error('Model is not advertised by the selected engine')
         if (args.reasoning_effort !== undefined && !model.thinkingOptions.some(item => item.id === args.reasoning_effort)) throw new Error('Reasoning effort is not advertised for the selected model')
         const defaultPermissionMode = args.engine === 'codex' ? 'workspace-write' : args.engine === 'claude-code' ? 'bypassPermissions' : 'dangerously-skip-permissions'
-        const permissionModeId = catalog.selection?.permissionModeId ?? defaultPermissionMode
+        const advertisedPermissionMode = catalog.selection?.permissionModeId
+        const permissionModeId = advertisedPermissionMode && (!Array.isArray(catalog.permissionModes) || catalog.permissionModes.some(mode => mode.id === advertisedPermissionMode)) ? advertisedPermissionMode : defaultPermissionMode
         this.initialConfigurations.set(row.childSessionId, { harnessId: args.engine, modelId, permissionModeId, ...(args.reasoning_effort !== undefined ? { thinkingOptionId: args.reasoning_effort } : {}) })
       }
       await this.save(parent, row)
@@ -161,7 +163,7 @@ export class NativeDelegation {
     const reply = boundedText(texts)
     const ended = end && (!start || end.seq > start.seq)
     const status = snapshot.running ? 'running' : !ended ? 'unknown' : end.data.reason.kind === 'completed' ? 'completed' : end.data.reason.kind === 'aborted' ? 'cancelled' : 'failed'
-    const nativeFailure = current.findLast(event => event.type === HOST_TURN_FAILURE && event.ignorable === true && event.data.version === 1 && event.data.harnessId === row.engine && (currentTurn === undefined || event.data.turn === currentTurn))?.data.failure
+    const nativeFailure = current.findLast(event => isHostRecord(event.type, 'turn-failure') && event.ignorable === true && event.data.version === 1 && event.data.harnessId === row.engine && (currentTurn === undefined || event.data.turn === currentTurn))?.data.failure
     const failure = status === 'failed' ? observedTurnFailure(nativeFailure ?? end?.data.reason.error) : undefined
     return { ...base, status, reply: reply.text, reply_truncated: reply.truncated, history_partial: snapshot.partial, ...(failure ? { failure } : {}) }
   }
@@ -201,7 +203,7 @@ export async function installNativeDelegation(ctx, driver) {
   ctx.on('agent/created', async ({ agent }) => {
     const configuration = manager.initialConfigurations.get(agent.id)
     if (configuration) {
-      helpers.appendPluginRecord(agent.session, 'plugin:codexhost/configuration', configuration)
+      helpers.appendPluginRecord(agent.session, hostRecord('configuration'), configuration)
       await ctx.sessionPersistence.flush(agent.session)
     }
   })
@@ -213,7 +215,7 @@ export async function installNativeDelegation(ctx, driver) {
     const decision = await next()
     if (!targets.length || decision.kind === 'reject') return decision
     if (!ctx.tools.get('subagent', payload.agent)?.parameters.properties.engine) throw new Error('当前预设未允许统一 subagent 引擎入口')
-    return { ...decision, messages: [...decision.messages, helpers.createUserMessage({ content: [{ type: 'text', text: nativeDelegationInstruction(targets) }], source: { kind: 'codexhost-native-delegation', form: 'instructions' } })] }
+    return { ...decision, messages: [...decision.messages, helpers.createUserMessage({ content: [{ type: 'text', text: nativeDelegationInstruction(targets) }], source: { kind: 'dsh-host-native-delegation', form: 'instructions' } })] }
   })
   ctx.effect(() => () => manager.dispose())
   return manager

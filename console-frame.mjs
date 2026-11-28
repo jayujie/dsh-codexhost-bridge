@@ -2,7 +2,7 @@
 export function consoleDocument({ script, style }, channel) {
   const bootstrap = `(${consoleFrameBridge.toString()})(${JSON.stringify(channel)});`
   const safeScript = value => value.replace(/<\/script/gi, '<\\/script')
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"><title>CodexHost console</title><style>${style.replace(/<\/style/gi, '<\\/style')}</style></head><body><script>${safeScript(bootstrap)}</script><script>${safeScript(script)}</script></body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"><title>DSH Host console</title><style>${style.replace(/<\/style/gi, '<\\/style')}</style></head><body><script>${safeScript(bootstrap)}</script><script>${safeScript(script)}</script></body></html>`
 }
 
 function consoleFrameBridge(channel) {
@@ -42,7 +42,7 @@ function consoleFrameBridge(channel) {
       const url = URL.createObjectURL(await response.blob())
       const download = document.createElement('a')
       download.href = url
-      download.download = 'codexhost-diagnostics.json'
+      download.download = 'dsh-host-diagnostics.json'
       download.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     }).catch(error => window.alert(error.message))

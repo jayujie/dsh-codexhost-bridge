@@ -1,6 +1,7 @@
+import { hostRecord, isHostRecord } from './host-identity.mjs'
 import { replyMapping, readRecentTurns } from './native-replies.mjs'
 
-export const AUTONOMOUS_COLLABORATION = 'plugin:codexhost/autonomous-collaboration'
+export const AUTONOMOUS_COLLABORATION = hostRecord('autonomous-collaboration')
 const permitted = name => /^team_task_(create|list|get|update)$/.test(name)
 const failure = (code, message) => ({ isError: true, error: { code, message }, content: [{ type: 'text', text: `${code}: ${message}` }] })
 const instructions = 'Only shared task-board tools are available in this autonomous Turn. Read the latest task revision before updating it. Task updates do not wake agents. Delegation and messages require a new DSH-managed request. Never automatically replay a mutation with an unknown outcome.'
@@ -25,7 +26,7 @@ export class AutonomousTeamCollaboration {
 
   resolve(threadId) {
     if (typeof threadId !== 'string' || this.isStopped()) return undefined
-    const matches = this.ctx.agents?.list().filter(agent => agent.session.snapshotEvents().findLast(event => event.type === 'plugin:codexhost/thread' && event.ignorable === true)?.data.threadId === threadId) ?? []
+    const matches = this.ctx.agents?.list().filter(agent => agent.session.snapshotEvents().findLast(event => isHostRecord(event.type, 'thread') && event.ignorable === true)?.data.threadId === threadId) ?? []
     const agent = matches.length === 1 ? matches[0] : undefined
     return agent && ['claude-code', 'antigravity'].includes(this.owner(agent)) && replyMapping(agent, this.owner(agent))?.threadId === threadId ? agent : undefined
   }
@@ -61,7 +62,7 @@ export class AutonomousTeamCollaboration {
         const hostTurnId = await activeTurn(peer)
         if (!hostTurnId) return failure('COLLABORATION_NATIVE_TURN_INACTIVE', 'No single active native Turn owns this request. Send a new message through DSH to use collaboration tools.')
         const signature = JSON.stringify([request.name, request.arguments ?? {}])
-        const receipts = agent.session.snapshotEvents().filter(event => event.type === AUTONOMOUS_COLLABORATION && event.ignorable === true && event.data.threadId === request.threadId && event.data.hostTurnId === hostTurnId && event.data.id === request.id)
+        const receipts = agent.session.snapshotEvents().filter(event => isHostRecord(event.type, 'autonomous-collaboration') && event.ignorable === true && event.data.threadId === request.threadId && event.data.hostTurnId === hostTurnId && event.data.id === request.id)
         const toolSet = await this.ctx.tools.resolve({ agent, modelSelection: agent.model.current(), signal })
         try {
           const schemas = this.ctx.tools.schemas(agent, toolSet).filter(tool => permitted(tool.name))

@@ -94,21 +94,21 @@ function seed(thread) {
 test('the import record carries the sync watermark and the truncated flag', t => {
   const events = seed({ ...idle, id: 't', createdAt: 1, turns: [turn('h0'), turn('h1')], truncated: true })
   if (events instanceof Error) return t.skip('historySeed needs the full DSH helpers: ' + events.message)
-  const record = events.find(e => e.type === 'plugin:codexhost/import')
+  const record = events.find(e => e.type === 'plugin:dsh-host/import')
   assert.equal(record.data.newestTurnId, 'h1')
   assert.equal(record.data.truncated, true)
   assert.equal(record.data.turns, 2)
-  const plain = seed({ ...idle, id: 't', createdAt: 1, turns: [turn('h0')] }).find(e => e.type === 'plugin:codexhost/import')
+  const plain = seed({ ...idle, id: 't', createdAt: 1, turns: [turn('h0')] }).find(e => e.type === 'plugin:dsh-host/import')
   assert.equal('truncated' in plain.data, false)
 })
 
 test('importedThroughTurn reads the newest watermark for the matching Thread only', () => {
-  const rec = (threadId, newestTurnId) => ({ type: 'plugin:codexhost/import', ignorable: true, data: { version: 1, threadId, ...(newestTurnId ? { newestTurnId } : {}) } })
+  const rec = (threadId, newestTurnId) => ({ type: 'plugin:dsh-host/import', ignorable: true, data: { version: 1, threadId, ...(newestTurnId ? { newestTurnId } : {}) } })
   const session = events => ({ snapshotEvents: () => events })
   assert.equal(importedThroughTurn(session([rec('t', 'x1'), rec('t', 'x2')]), 't'), 'x2')
   assert.equal(importedThroughTurn(session([rec('other', 'y1')]), 't'), undefined)
   assert.equal(importedThroughTurn(session([rec('t')]), 't'), undefined, 'older imports without a watermark keep the previous behaviour')
-  assert.equal(importedThroughTurn(session([{ type: 'plugin:codexhost/import', data: { threadId: 't', newestTurnId: 'z' } }]), 't'), undefined, 'only ignorable plugin records count')
+  assert.equal(importedThroughTurn(session([{ type: 'plugin:dsh-host/import', data: { threadId: 't', newestTurnId: 'z' } }]), 't'), undefined, 'only ignorable plugin records count')
 })
 
 test('reply catch-up stops at the import watermark and never fetches older pages', async () => {

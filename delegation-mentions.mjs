@@ -2,7 +2,7 @@
 export const DELEGATION_AGENTS = Object.freeze([
   { id: 'codex', label: 'Codex' }, { id: 'claude-code', label: 'Claude Code' }, { id: 'antigravity', label: 'Antigravity' }, { id: 'deepseek-harness', label: 'DSH' },
 ])
-export const DELEGATION_SOURCE = 'codexhost-agent'
+export const DELEGATION_SOURCE = 'dsh-host-agent'
 export function delegationCarrier(id) {
   const target = DELEGATION_AGENTS.find(agent => agent.id === id)
   if (!target) throw new TypeError('Unsupported delegation target')

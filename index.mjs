@@ -4,10 +4,13 @@ import { installConsoleRemote } from './console-host.mjs'
 import { OwnedHostRuntime } from './owned-host-runtime.mjs'
 import { installObservationProjection } from './native-observations.mjs'
 import { installQuotaPauseProjection } from './native-quota-pause.mjs'
-import { installSessionApiCost } from './session-api-cost.mjs'
+import { installSessionApiCost, loadLocalPriceLookup } from './session-api-cost.mjs'
 import { installWorkspaceFilePaths } from './workspace-file-paths.mjs'
 import { installNativeDelegation } from './native-delegation.mjs'
 import { installCollaborationBridge } from './host-collaboration.mjs'
+import { installSettlementPatch } from './subagent-settlement.mjs'
+import { hostDataDirectory } from './backend-paths.mjs'
+import { LAST_AGENT_FILENAME } from './last-agent.mjs'
 import path from 'node:path'
 
 export const name = 'dsh-host'
@@ -25,7 +28,9 @@ try {
       nativeCancelTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(10_000).description('Maximum wait time to cancel an active external turn (ms).'),
       hostStartTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(30_000).description('Maximum wait time for the background Host process to become ready (ms).'),
       generateMissingTitles: z.boolean().default(true).description('Automatically generate concise titles for external engine sessions.'),
-      nativeClaudeTitles: z.boolean().default(true).description('Use an isolated native Claude session for Claude Code titles.'),
+      titleProvider: z.string().description('Optional DSH LLM provider id used for automatic session title generation (must be set with titleModel).'),
+      titleModel: z.string().description('Optional DSH LLM model id used for automatic session title generation (must be set with titleProvider).'),
+      nativeClaudeTitles: z.boolean().default(false).description('Use an isolated native Claude session for Claude Code titles instead of the DSH title model.'),
       claudeTitleModel: z.string().default('claude-haiku-5-5').description('Native Claude model used for title generation.'),
       claudeTitleMaxOutputTokens: z.number().step(1).min(128).max(4096).default(512).description('Maximum output tokens for native Claude title generation.'),
       claudeTitleTimeoutMs: z.number().step(1).min(1000).max(60_000).default(30_000).description('Timeout for native Claude title generation (ms).'),
@@ -45,7 +50,11 @@ try {
 export { Config }
 
 export async function apply(ctx, config = {}) {
-  const observations = await installObservationProjection(ctx)
+  for (const key of ['backendDataDir', 'legacyHostDataDir', 'descriptorPath', 'hostRuntimePath', 'hostNodePath', 'stockCodexPath']) {
+    if (config[key] !== undefined && (typeof config[key] !== 'string' || !path.isAbsolute(config[key]))) throw new TypeError(`${key} must be an absolute path`)
+  }
+  const priceLookup = await loadLocalPriceLookup(config)
+  const observations = await installObservationProjection(ctx, { lookup: priceLookup })
   await installQuotaPauseProjection(ctx)
   installWorkspaceFilePaths(ctx)
   const turnTimeoutMs = timeout(config.nativeTurnTimeoutMs, 600_000, 'nativeTurnTimeoutMs')
@@ -54,14 +63,20 @@ export async function apply(ctx, config = {}) {
   if (config.autoStartHost !== undefined && typeof config.autoStartHost !== 'boolean') throw new TypeError('autoStartHost must be a boolean')
   const idleReleaseMinutes = config.idleReleaseMinutes ?? 30
   if (!Number.isSafeInteger(idleReleaseMinutes) || idleReleaseMinutes < 5 || idleReleaseMinutes > 1440) throw new TypeError('idleReleaseMinutes must be an integer between 5 and 1440')
-  for (const key of ['backendDataDir', 'legacyHostDataDir', 'descriptorPath', 'hostRuntimePath', 'hostNodePath', 'stockCodexPath']) {
-    if (config[key] !== undefined && (typeof config[key] !== 'string' || !path.isAbsolute(config[key]))) throw new TypeError(`${key} must be an absolute path`)
-  }
-  await installSessionApiCost(ctx, config)
+  await installSessionApiCost(ctx, config, priceLookup)
   const runtime = new OwnedHostRuntime({ ...config, hostStartTimeoutMs, idleReleaseMinutes })
   if (config.generateMissingTitles !== undefined && typeof config.generateMissingTitles !== 'boolean') throw new TypeError('generateMissingTitles must be a boolean')
   const titlePolicy = { enabled: config.generateMissingTitles !== false, timeoutMs: timeout(config.titleTimeoutMs, 30_000, 'titleTimeoutMs'),
-    maxInputBytes: positive(config.titleMaxInputBytes, 16_000, 'titleMaxInputBytes'), maxOutputTokens: positive(config.titleMaxOutputTokens, 512, 'titleMaxOutputTokens') }
+    maxInputBytes: positive(config.titleMaxInputBytes, 32_768, 'titleMaxInputBytes'), maxOutputTokens: positive(config.titleMaxOutputTokens, 512, 'titleMaxOutputTokens') }
+  const hasTitleProvider = config.titleProvider !== undefined
+  const hasTitleModel = config.titleModel !== undefined
+  if (hasTitleProvider !== hasTitleModel) throw new TypeError('titleProvider and titleModel must be supplied together')
+  if (hasTitleProvider) {
+    if (typeof config.titleProvider !== 'string' || !config.titleProvider.trim()) throw new TypeError('titleProvider must be a non-empty string')
+    if (typeof config.titleModel !== 'string' || !config.titleModel.trim()) throw new TypeError('titleModel must be a non-empty string')
+    titlePolicy.provider = config.titleProvider.trim()
+    titlePolicy.model = config.titleModel.trim()
+  }
   if (config.nativeClaudeTitles !== undefined && typeof config.nativeClaudeTitles !== 'boolean') throw new TypeError('nativeClaudeTitles must be a boolean')
   const nativeTitleModel = config.claudeTitleModel ?? 'claude-haiku-5-5'
   if (typeof nativeTitleModel !== 'string' || !nativeTitleModel.startsWith('claude-') || nativeTitleModel.length > 256) throw new TypeError('claudeTitleModel must be a native Claude model identifier')
@@ -69,14 +84,16 @@ export async function apply(ctx, config = {}) {
   if (!Number.isSafeInteger(nativeTitleTokens) || nativeTitleTokens < 128 || nativeTitleTokens > 4096) throw new TypeError('claudeTitleMaxOutputTokens must be between 128 and 4096')
   if (!Number.isSafeInteger(nativeTitleTimeout) || nativeTitleTimeout < 1000 || nativeTitleTimeout > 60000) throw new TypeError('claudeTitleTimeoutMs must be between 1000 and 60000')
   if (!Number.isFinite(nativeTitleCost) || nativeTitleCost <= 0 || nativeTitleCost > 1) throw new TypeError('claudeTitleMaxCostUsd must be greater than 0 and at most 1')
-  titlePolicy.nativeClaude = { enabled: titlePolicy.enabled && config.nativeClaudeTitles !== false, model: nativeTitleModel, maxInputBytes: Math.min(titlePolicy.maxInputBytes, 65536), maxOutputTokens: nativeTitleTokens, timeoutMs: nativeTitleTimeout, maxCostUsd: nativeTitleCost }
+  titlePolicy.nativeClaude = { enabled: titlePolicy.enabled && config.nativeClaudeTitles === true, model: nativeTitleModel, maxInputBytes: Math.min(titlePolicy.maxInputBytes, 65536), maxOutputTokens: nativeTitleTokens, timeoutMs: nativeTitleTimeout, maxCostUsd: nativeTitleCost }
   if (config.nativeInteractionApprovals !== undefined && typeof config.nativeInteractionApprovals !== 'boolean') throw new TypeError('nativeInteractionApprovals must be a boolean')
-  const driver = await installNativeSessionDriver(ctx, { turnTimeoutMs, cancelTimeoutMs, titlePolicy, nativeInteractionApprovals: config.nativeInteractionApprovals !== false, observationOf: session => observations.stateOf(session), connect: () => runtime.connect() })
+  const lastAgentPath = path.join(hostDataDirectory(config), LAST_AGENT_FILENAME)
+  const driver = await installNativeSessionDriver(ctx, { turnTimeoutMs, cancelTimeoutMs, titlePolicy, nativeInteractionApprovals: config.nativeInteractionApprovals !== false, hostConfig: config, lastAgentPath, observationOf: session => observations.stateOf(session), connect: () => runtime.connect() })
   const collaboration = await installCollaborationBridge(ctx, driver, Object.assign({}, ...await Promise.all(['@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session'].map(name => ctx.loader.import(name)))))
   driver.setCollaboration(collaboration.manager)
   runtime.setClaudeEnvironment(collaboration.environment)
-  ctx.effect(() => async () => { await driver.dispose(); await runtime.close() }, 'codexhost: owned background Host')
+  ctx.effect(() => async () => { await driver.dispose(); await runtime.close() }, 'dsh-host: owned background Host')
   await installNativeDelegation(ctx, driver)
+  installSettlementPatch(ctx)
   await installNativeRemote(ctx, driver)
   await installConsoleRemote(ctx, config, driver)
 }

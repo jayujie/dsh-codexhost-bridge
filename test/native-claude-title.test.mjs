@@ -5,7 +5,7 @@ import { completeNativeClaudeTitle } from '../native-claude-title.mjs'
 const GENERATE = 'dsh/claude/title/generate'
 const CANCEL = 'dsh/claude/title/cancel'
 const TITLE = 'session/title'
-const AUDIT = 'plugin:codexhost/native-title'
+const AUDIT = 'plugin:dsh-host/native-title'
 const policy = { enabled: true, maxInputBytes: 16000, timeoutMs: 15000, maxOutputTokens: 512, model: 'claude-haiku-5-5', maxCostUsd: 0.05 }
 
 function deferred() {
@@ -71,7 +71,7 @@ test('native Claude title uses one detached RPC, persists DSH title and synchron
   assert.equal(formalTitles(f).length, 1)
   assert.equal(formalTitles(f)[0].data.title, '依赖与导入修复')
   assert.equal(formalTitles(f)[0].data.source.kind, 'provider')
-  assert.equal(formalTitles(f)[0].data.source.provider, 'codexhost-native-title')
+  assert.equal(formalTitles(f)[0].data.source.provider, 'dsh-host-native-title')
   assert.deepEqual(formalTitles(f)[0].data.messageSeqs, [2])
   assert.ok(f.flushes.length >= 1)
   assert.deepEqual(f.calls.find(call => call.method === 'thread/name/set').params, { threadId: f.mapping.threadId, name: '依赖与导入修复' })

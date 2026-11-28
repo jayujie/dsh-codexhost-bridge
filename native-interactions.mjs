@@ -1,3 +1,4 @@
+import { hostRecord, isHostRecord } from './host-identity.mjs'
 import { HostConnectionError } from './native-host-client.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -149,7 +150,7 @@ export class NativeInteractionBridge {
     return { target: root, delegated: true, subagentLabel }
   }
   #log(entry, phase, extra = {}) {
-    this.#helpers.appendPluginRecord(this.#agent.session, 'plugin:codexhost/interaction', { sessionId: this.#agent.session.id, threadId: this.#threadId, turnId: this.#turnId(), localTurn: this.#localTurn, requestId: entry.message.id, method: entry.message.method, phase, ...extra })
+    this.#helpers.appendPluginRecord(this.#agent.session, hostRecord('interaction'), { sessionId: this.#agent.session.id, threadId: this.#threadId, turnId: this.#turnId(), localTurn: this.#localTurn, requestId: entry.message.id, method: entry.message.method, phase, ...extra })
   }
   async #flush() { await this.#ctx.sessionPersistence.flush(this.#agent.session) }
   accept(message) {
@@ -191,7 +192,7 @@ export class NativeInteractionBridge {
         // Explicitly authorized plugin policy: only this external, non-full Session.
         // Append without injecting a fake user message into the native engine.
         const events = this.#agent.session.snapshotEvents()
-        const activated = events.some(event => event.type === 'plugin:codexhost/interaction' && event.data.phase === 'policy-enabled' && event.data.sessionId === this.#agent.session.id)
+        const activated = events.some(event => isHostRecord(event.type, 'interaction') && event.data.phase === 'policy-enabled' && event.data.sessionId === this.#agent.session.id)
         if (this.#allowPrompts && nonFull.has(this.#permission) && !activated) {
           const current = events.findLast(event => event.type === 'approval/policy')
           this.#log(entry, 'policy-enabled')
@@ -201,7 +202,7 @@ export class NativeInteractionBridge {
         if (signal.aborted || this.#closed) return
         const scope = JSON.stringify(descriptor.params, null, 2)
         const reason = `外部 Agent 请求执行以下操作，仅确认本次请求，不选择整会话或永久授权：\n${scope}`
-        const candidate = typeof descriptor.params.itemId === 'string' ? `codexhost:${this.#localTurn}:${descriptor.params.itemId}` : undefined
+        const candidate = typeof descriptor.params.itemId === 'string' ? `dsh-host:${this.#localTurn}:${descriptor.params.itemId}` : undefined
         const callId = candidate && events.some(event => event.type === 'tool/call' && event.data.callId === candidate) ? candidate : undefined
         // ApprovalService itself races cancellation and commits approval/decided.
         // Await that audit completion before the enclosing DSH turn can finish.

@@ -38,7 +38,7 @@ test('background start uses normal admitted executor/logging once and closes wit
     const first = await lease.call(request), second = await lease.call(request)
     assert.deepEqual(first, second); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].name, 'pwsh')
     assert.equal(JSON.parse(f.calls[0].arguments).run_in_background, true)
-    assert.ok(f.events.some(e => e.type === 'plugin:codexhost/collaboration' && e.data.channel === 'background'))
+    assert.ok(f.events.some(e => e.type === 'plugin:dsh-host/collaboration' && e.data.channel === 'background'))
     await assert.rejects(lease.call({ ...request, arguments: { command: 'different', run_in_background: true } }), /conflict/)
     await lease.close(); await assert.rejects(lease.call({ ...request, id: 'after-close' }), /no longer active/)
   } finally { await f.manager.close() }

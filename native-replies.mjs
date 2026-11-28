@@ -1,11 +1,14 @@
+import { hostRecord, isHostRecord } from './host-identity.mjs'
+import { normalizeFileUriMarkdownLinks } from './file-uri-links.mjs'
+
 /** Thread-level, display-only reception. Never resumes a Thread or submits/replays input. */
-export const NATIVE_MESSAGE = 'plugin:codexhost/native-message'
-const THREAD_RECORD = 'plugin:codexhost/thread'
+export const NATIVE_MESSAGE = hostRecord('native-message')
+const THREAD_RECORD = hostRecord('thread')
 const TERMINAL = new Set(['completed', 'failed', 'interrupted'])
 const MAX_HISTORY_BYTES = 24 * 1024 * 1024
 const identity = (turn, item) => JSON.stringify([turn, item])
 const nonempty = value => typeof value === 'string' && value.trim().length > 0
-const normalize = text => text.replace(/\s+/gu, ' ').trim()
+const normalize = text => normalizeFileUriMarkdownLinks(text).replace(/\s+/gu, ' ').trim()
 
 /** Item completion and execution outcome are separate: a later API error cannot cancel earlier text. */
 export function nativeReplyItemStatus(turn, item, lastMessage = turn.items.findLast(value => value.type === 'agentMessage')) {
@@ -25,7 +28,7 @@ async function observeUntilAbort(operation, signal) {
 }
 
 export function replyMapping(agent, owner) {
-  const state = agent.session.snapshotEvents().findLast(e => e.type === THREAD_RECORD && e.ignorable === true)?.data
+  const state = agent.session.snapshotEvents().findLast(e => isHostRecord(e.type, 'thread') && e.ignorable === true)?.data
   if (!state || state.version !== 1 || !owner || state.harnessId !== owner || !nonempty(state.threadId)
     || (state.sessionId !== undefined && state.sessionId !== agent.id)
     || (agent.session.header?.parentSession !== undefined && state.sessionId !== agent.id)
@@ -37,7 +40,7 @@ export function replyMapping(agent, owner) {
 export function locallyCovered(session, hostTurnId, text) {
   if (!text.trim()) return true
   const events = session.snapshotEvents()
-  const local = events.findLast(e => e.type === THREAD_RECORD && e.ignorable === true && e.data.hostTurnId === hostTurnId)?.data.localTurn
+  const local = events.findLast(e => isHostRecord(e.type, 'thread') && e.ignorable === true && e.data.hostTurnId === hostTurnId)?.data.localTurn
   if (!Number.isSafeInteger(local)) return false
   const visible = events.filter(e => e.type === 'assistant/message' && e.surfaceOp === 'append' && e.data.turn === local)
     .flatMap(e => e.data.message.content.filter(b => b.type === 'text').map(b => b.text)).join('\n')
@@ -125,7 +128,7 @@ export function coveredTurn(state, turn) {
  * covered (or was deliberately left out of a trimmed import), so catch-up never pages past it.
  */
 export function importedThroughTurn(session, threadId) {
-  const record = session.snapshotEvents().findLast(e => e.type === 'plugin:codexhost/import' && e.ignorable === true && e.data?.threadId === threadId && nonempty(e.data.newestTurnId))
+  const record = session.snapshotEvents().findLast(e => isHostRecord(e.type, 'import') && e.ignorable === true && e.data?.threadId === threadId && nonempty(e.data.newestTurnId))
   return record?.data.newestTurnId
 }
 
@@ -134,7 +137,7 @@ export function savedReplies(session, threadId) {
   const items = new Map()
   for (const event of session.snapshotEvents()) {
     const d = event.data
-    if (event.type !== NATIVE_MESSAGE || event.ignorable !== true || d?.version !== 1 || d.threadId !== threadId
+    if (!isHostRecord(event.type, 'native-message') || event.ignorable !== true || d?.version !== 1 || d.threadId !== threadId
       || !nonempty(d.hostTurnId) || !nonempty(d.itemId) || !Number.isSafeInteger(d.revision) || d.revision < 1 || typeof d.text !== 'string') continue
     const key = identity(d.hostTurnId, d.itemId), previous = items.get(key)
     if (previous && d.revision <= previous.revision) continue

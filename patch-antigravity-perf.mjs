@@ -13,7 +13,35 @@ export function patchAntigravityPerf(source, replace) {
     'disable hardcoded 30m agy --print-timeout so DSH nativeTurnTimeoutMs governs long turns',
   );
 
-  // 0. Context window (516K) + /compact command + canonical model ID for pricing + cache-aware hostUsage + UsageMeter metering.
+  // 0. Context window (516K) + /compact command + xhigh/max effort merging + canonical model ID for pricing + cache-aware hostUsage + UsageMeter metering.
+  source = replace(
+    source,
+    `var EFFORT_LABELS = /* @__PURE__ */ new Map([
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"]
+]);
+var EFFORT_SUFFIX_PATTERN = /^(?<base>.+)-(?<effort>low|medium|high)$/u;
+var EFFORT_LABEL_SUFFIX_PATTERN = /\\s*\\((?:low|medium|high)\\)$/iu;`,
+    `var EFFORT_LABELS = /* @__PURE__ */ new Map([
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"],
+  ["xhigh", "XHigh"],
+  ["max", "Max"]
+]);
+var EFFORT_SUFFIX_PATTERN = /^(?<base>.+)-(?<effort>low|medium|high|xhigh|max)$/u;
+var EFFORT_LABEL_SUFFIX_PATTERN = /\\s*\\((?:low|medium|high|xhigh|max)\\)$/iu;`,
+    'merge Antigravity xhigh and max model variants into base model thinking efforts',
+  );
+
+  source = replace(
+    source,
+    '  const defaultThinkingOptionId = options.at(-1)?.id;',
+    '  const defaultThinkingOptionId = options.find((option) => option.id === "high")?.id ?? options.at(-1)?.id;',
+    'keep high as default Antigravity thinking effort when xhigh/max options exist',
+  );
+
   source = replace(
     source,
     'var GEMINI_CONTEXT_WINDOW_TOKENS = 1048576;',
@@ -191,20 +219,22 @@ export function patchAntigravityPerf(source, replace) {
   source = replace(
     source,
     '      this.#history.bindNativeSession(event.conversation_id);\n      this.#event({ type: "session.state.changed", state: this.#state() });\n      this.#ensureContextUsage(active, event.conversation_id);',
-    '      this.#history.bindNativeSession(event.conversation_id);\n      this.#event({ type: "session.state.changed", state: this.#state() });\n      if (!this.#dshUsageHistoryEmitted) await this.#dshSyncTranscriptUsage(event.conversation_id, active.model?.id, true);\n      this.#ensureContextUsage(active, event.conversation_id);',
-    'initialize UsageMeter history on Antigravity conversation init',
+    '      this.#history.bindNativeSession(event.conversation_id);\n      active.liveObserver?.attachConversation(event.conversation_id);\n      this.#event({ type: "session.state.changed", state: this.#state() });\n      if (!this.#dshUsageHistoryEmitted) await this.#dshSyncTranscriptUsage(event.conversation_id, active.model?.id, true);\n      this.#ensureContextUsage(active, event.conversation_id);',
+    'initialize UsageMeter history and live observer on Antigravity conversation init',
   );
 
   source = replace(
     source,
     `    if (active.cancellationRequested) {
       this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user", checkpoint }, nativeTurnRef);`,
-    `    await this.#dshSyncTranscriptUsage(convId, active.model?.id, false, event.result.usage, safeTurnId, active);
+    `    active.liveObserver?.attachConversation(convId);
+    await active.liveObserver?.flush();
+    await this.#dshSyncTranscriptUsage(convId, active.model?.id, false, event.result.usage, safeTurnId, active);
     if (this.#active !== active)
       return;
     if (active.cancellationRequested) {
       this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user", checkpoint }, nativeTurnRef);`,
-    'emit exact transcript usage requests and cache reads before turn completion',
+    'flush live visibility observer and emit exact transcript usage requests before turn completion',
   );
 
   source = replace(
@@ -812,6 +842,875 @@ export function patchAntigravityPerf(source, replace) {
     '    this.#quotaAbort.abort();\n    await Promise.all([...this.#sessions].map((session) => session.close()));',
     '    this.#quotaAbort.abort();\n    this.#dshRefreshAbort.abort();\n    await Promise.all([...this.#sessions].map((session) => session.close()));\n    await Promise.allSettled([this.#dshBgRefresh, this.#quotaRefresh].filter(Boolean));',
     'abort and settle background Antigravity refreshes on adapter close',
+  );
+
+  // 4. Live visibility: stream thinking, API retry/error logs, and actionable system notifications as native reasoning blocks.
+  source = replace(
+    source,
+    `      logPath,
+      agentItem: null,
+      agentText: "",
+      turnAgentText: "",`,
+    `      logPath,
+      agentItem: null,
+      agentText: "",
+      turnAgentText: "",
+      reasoningItem: null,
+      reasoningText: "",
+      liveObserver: null,
+      deferredVisibility: [],
+      flushedSteps: /* @__PURE__ */ new Set(),`,
+    'track live reasoning and visibility observer state on active Antigravity turn',
+  );
+
+  source = replace(
+    source,
+    `    this.#active = active;
+    this.#subagentObservers.add(active.subagents);`,
+    `    this.#active = active;
+    this.#subagentObservers.add(active.subagents);
+    active.liveObserver = new DshAntigravityLiveObserver({
+      environment: this.#environment,
+      logPath,
+      initialConversationId: this.#nativeRef?.nativeSessionId,
+      onReady: () => {
+        this.#enqueue(active, () => {
+          if (this.#active !== active)
+            return;
+          this.#dshDrainVisibility(active);
+        });
+      }
+    });
+    active.liveObserver.start();`,
+    'start incremental Antigravity log and transcript live observer per turn',
+  );
+
+  source = replace(
+    source,
+    `    child.once("close", (code) => {
+      this.#enqueue(active, () => {
+        void unlink(active.logPath).catch(() => void 0);`,
+    `    child.once("close", (code) => {
+      this.#enqueue(active, async () => {
+        if (this.#active === active && !active.receivedResult) {
+          await active.liveObserver?.flush();
+          this.#dshDrainVisibility(active);
+        }
+        active.liveObserver?.stop();
+        void unlink(active.logPath).catch(() => void 0);`,
+    'flush and stop live visibility observer before removing Antigravity temp log',
+  );
+
+  source = replace(
+    source,
+    `    active.liveObserver?.attachConversation(convId);
+    await active.liveObserver?.flush();`,
+    `    active.liveObserver?.attachConversation(convId);
+    await active.liveObserver?.flush();
+    if (this.#active === active)
+      this.#dshDrainVisibility(active);`,
+    'drain final visibility events before completing Antigravity turn',
+  );
+
+  source = replace(
+    source,
+    `  async #handleStep(active, step) {
+    if (step.step_type === "subagent") {
+      if (active.agentItem) {
+        this.#completeItem(active, active.agentItem, { status: "succeeded" });
+        active.agentItem = null;
+        active.agentText = "";
+      }
+      if (active.subagents.handle(step))
+        return;
+      step = { ...step, step_type: "tool" };
+    }
+    if (step.step_type === "agent_response") {
+      if (typeof step.text_delta === "string" && step.text_delta.length > 0) {
+        this.#appendOrSyncAgentText(active, step.text_delta, true);
+        return;
+      }
+      const fullOrDelta = step.text ?? (typeof step.content === "string" ? step.content : void 0) ?? (typeof step.message === "string" ? step.message : void 0);
+      if (typeof fullOrDelta === "string" && fullOrDelta.length > 0) {
+        this.#appendOrSyncAgentText(active, fullOrDelta, false);
+        return;
+      }
+      return;
+    }
+    if (step.step_type !== "tool")
+      return;
+    if (active.agentItem) {
+      this.#completeItem(active, active.agentItem, { status: "succeeded" });
+      active.agentItem = null;
+      active.agentText = "";
+    }`,
+    `  async #handleStep(active, step) {
+    const directThinking = typeof step.thinking_delta === "string" && step.thinking_delta.length > 0
+      ? step.thinking_delta
+      : ((step.step_type === "thinking" || step.step_type === "reasoning")
+        ? (typeof step.text_delta === "string" ? step.text_delta : typeof step.thinking === "string" ? step.thinking : typeof step.text === "string" ? step.text : "")
+        : "");
+    if (directThinking) {
+      this.#dshHandleVisibilityEvent(active, { kind: "thinking-delta", text: directThinking });
+      if (step.step_type === "thinking" || step.step_type === "reasoning")
+        return;
+    }
+    if (step.step_type === "system_message" || step.step_type === "error_message") {
+      const raw = typeof step.error === "string" ? step.error : typeof step.text === "string" ? step.text : typeof step.content === "string" ? step.content : typeof step.message === "string" ? step.message : "";
+      const text = step.step_type === "error_message"
+        ? (raw.trim() ? \`[AGY 错误] \${raw.trim().slice(0, 320)}\` : null)
+        : dshExtractAntigravitySystemMessage(raw);
+      if (text)
+        this.#dshHandleVisibilityEvent(active, { kind: step.step_type === "error_message" ? "error" : "system", text });
+      return;
+    }
+    if (step.step_type === "subagent") {
+      if (!active.flushedSteps.has(step.step_index)) {
+        active.flushedSteps.add(step.step_index);
+        await active.liveObserver?.flush();
+        if (this.#active !== active)
+          return;
+        this.#dshDrainVisibility(active);
+      }
+      this.#dshCloseAgentAndDeferred(active);
+      this.#dshFlushReasoning(active);
+      if (active.subagents.handle(step))
+        return;
+      step = { ...step, step_type: "tool" };
+    }
+    if (step.step_type === "agent_response") {
+      if (!active.agentItem && !active.flushedSteps.has(step.step_index)) {
+        active.flushedSteps.add(step.step_index);
+        await active.liveObserver?.flush();
+        if (this.#active !== active)
+          return;
+        this.#dshDrainVisibility(active);
+      }
+      if (typeof step.text_delta === "string" && step.text_delta.length > 0) {
+        this.#appendOrSyncAgentText(active, step.text_delta, true);
+        return;
+      }
+      const fullOrDelta = step.text ?? (typeof step.content === "string" ? step.content : void 0) ?? (typeof step.message === "string" ? step.message : void 0);
+      if (typeof fullOrDelta === "string" && fullOrDelta.length > 0) {
+        this.#appendOrSyncAgentText(active, fullOrDelta, false);
+        return;
+      }
+      return;
+    }
+    if (step.step_type !== "tool")
+      return;
+    if (!active.flushedSteps.has(step.step_index)) {
+      active.flushedSteps.add(step.step_index);
+      await active.liveObserver?.flush();
+      if (this.#active !== active)
+        return;
+      this.#dshDrainVisibility(active);
+    }
+    this.#dshCloseAgentAndDeferred(active);
+    this.#dshFlushReasoning(active);`,
+    'handle Antigravity thinking, system, and error steps and flush live observer in order',
+  );
+
+  source = replace(
+    source,
+    `  #appendAgentText(active, text) {
+    active.turnAgentText += text;
+    if (!active.agentItem) {
+      active.agentItem = { type: "agentMessage", itemId: this.#newItemId(), text };`,
+    `  #dshDrainVisibility(active) {
+    const events = active.liveObserver?.drain() ?? [];
+    for (const visEvent of events) {
+      if (visEvent?.kind === "auth-refresh-network-stalled") {
+        const msg = \`OAuth token refresh failed due to network error: \${visEvent.reason}\`;
+        if (this.#dshMaybeRetryPreTurn(active, msg, { safeTurnId: null, repliedThisTurn: false }))
+          return;
+        continue;
+      }
+      this.#dshHandleVisibilityEvent(active, visEvent);
+    }
+  }
+  #dshHandleVisibilityEvent(active, visEvent) {
+    if (!visEvent || typeof visEvent.text !== "string" || !visEvent.text.trim())
+      return;
+    if (active.agentItem) {
+      active.deferredVisibility.push(visEvent);
+      return;
+    }
+    if (visEvent.kind === "thinking") {
+      this.#dshFlushReasoning(active);
+      const text = visEvent.text.replace(/[\\r\\n]+$/u, "");
+      if (!text)
+        return;
+      this.#dshAppendReasoningText(active, text);
+      this.#dshFlushReasoning(active);
+      return;
+    }
+    if (visEvent.kind === "thinking-delta") {
+      this.#dshAppendReasoningText(active, visEvent.text);
+      return;
+    }
+    const line = visEvent.text.replace(/[\\r\\n]+$/u, "");
+    if (!line)
+      return;
+    const prefix = active.reasoningText ? "\\n" : "";
+    this.#dshAppendReasoningText(active, prefix + line);
+  }
+  #dshAppendReasoningText(active, text) {
+    if (!text)
+      return;
+    if (!active.reasoningItem) {
+      active.reasoningItem = { type: "reasoning", itemId: this.#newItemId(), text };
+      active.reasoningText = text;
+      this.#event({ type: "item.started", turnId: active.command.turnId, item: active.reasoningItem });
+      return;
+    }
+    active.reasoningText += text;
+    active.reasoningItem = { ...active.reasoningItem, text: active.reasoningText };
+    this.#event({
+      type: "item.updated",
+      turnId: active.command.turnId,
+      itemId: active.reasoningItem.itemId,
+      update: { type: "text.append", text }
+    });
+  }
+  #dshFlushReasoning(active, outcome = { status: "succeeded" }) {
+    if (!active.reasoningItem)
+      return;
+    const item = active.reasoningItem;
+    active.reasoningItem = null;
+    active.reasoningText = "";
+    this.#completeItem(active, item, outcome);
+  }
+  #dshCloseAgentAndDeferred(active, outcome = { status: "succeeded" }) {
+    if (active.agentItem) {
+      this.#completeItem(active, active.agentItem, outcome);
+      active.agentItem = null;
+      active.agentText = "";
+    }
+    if (active.deferredVisibility.length > 0) {
+      const pending = active.deferredVisibility.splice(0);
+      for (const visEvent of pending)
+        this.#dshHandleVisibilityEvent(active, visEvent);
+    }
+  }
+  #appendAgentText(active, text) {
+    active.turnAgentText += text;
+    if (!active.agentItem) {
+      this.#dshFlushReasoning(active);
+      active.agentItem = { type: "agentMessage", itemId: this.#newItemId(), text };`,
+    'emit live Antigravity reasoning and runtime status blocks without splitting assistant messages',
+  );
+
+  source = replace(
+    source,
+    `    active.questions.stop();
+    this.#questionCleanup = this.#questionCleanup.then(async () => {`,
+    `    active.liveObserver?.stop();
+    active.questions.stop();
+    this.#questionCleanup = this.#questionCleanup.then(async () => {`,
+    'stop live visibility observer when Antigravity turn completes',
+  );
+
+  source = replace(
+    source,
+    `    active.subagents.finish(itemOutcome);
+    if (active.agentItem)
+      this.#completeItem(active, active.agentItem, itemOutcome);`,
+    `    active.subagents.finish(itemOutcome);
+    this.#dshCloseAgentAndDeferred(active, itemOutcome);
+    this.#dshFlushReasoning(active, itemOutcome);`,
+    'settle open Antigravity reasoning and deferred visibility blocks on turn completion',
+  );
+
+  // 5. Turn identity collision guard: never persist turn:0 or duplicate nativeTurnKey on failed/cancelled turns,
+  //    and always allocate a fresh unique positive key on succeeded turns.
+  source = replace(
+    source,
+    `  #write = Promise.resolve();
+  #writeTimer = null;
+  #writeDirty = false;
+  constructor(input) {
+    this.#file = input.file;
+    this.#nativeSessionId = input.nativeSessionId;
+    this.#turns = input.turns;
+    this.#model = input.model;
+    this.#thinkingOptionId = input.thinkingOptionId;
+  }`,
+    `  #write = Promise.resolve();
+  #writeTimer = null;
+  #writeDirty = false;
+  #dshKnownTurnKeys = /* @__PURE__ */ new Set();
+  constructor(input) {
+    this.#file = input.file;
+    this.#nativeSessionId = input.nativeSessionId;
+    this.#turns = input.turns;
+    this.#model = input.model;
+    this.#thinkingOptionId = input.thinkingOptionId;
+    for (const turn of input.turns) {
+      if (turn?.nativeTurnRef?.nativeTurnKey)
+        this.#dshKnownTurnKeys.add(turn.nativeTurnRef.nativeTurnKey);
+    }
+    for (const ref of input.knownTurnRefs ?? []) {
+      if (ref?.nativeTurnKey)
+        this.#dshKnownTurnKeys.add(ref.nativeTurnKey);
+    }
+  }
+  dshKnownTurnKeys() {
+    return new Set(this.#dshKnownTurnKeys);
+  }`,
+    'track all known nativeTurnKeys from history and MappingStore on AntigravityHistory',
+  );
+
+  source = replace(
+    source,
+    `    return new _AntigravityHistory({
+      file: file2,
+      nativeSessionId,
+      turns,
+      ...model2 ? { model: model2 } : {},
+      ...thinkingOptionId ? { thinkingOptionId } : {}
+    });`,
+    `    return new _AntigravityHistory({
+      file: file2,
+      nativeSessionId,
+      turns,
+      ...input.knownTurnRefs ? { knownTurnRefs: input.knownTurnRefs } : {},
+      ...model2 ? { model: model2 } : {},
+      ...thinkingOptionId ? { thinkingOptionId } : {}
+    });`,
+    'preserve knownTurnRefs from MappingStore when opening AntigravityHistory',
+  );
+
+  source = replace(
+    source,
+    `    const index = this.#turns.findIndex(({ nativeTurnRef }) => nativeTurnRef.nativeTurnKey === input.nativeTurnRef.nativeTurnKey);`,
+    `    this.#dshKnownTurnKeys.add(input.nativeTurnRef.nativeTurnKey);
+    const index = this.#turns.findIndex(({ nativeTurnRef }) => nativeTurnRef.nativeTurnKey === input.nativeTurnRef.nativeTurnKey);`,
+    'record appended nativeTurnKey in AntigravityHistory known-key set',
+  );
+
+  source = replace(
+    source,
+    `    const safeTurnId = event.result.num_turns !== void 0 && event.result.num_turns !== null ? \`turn:\${event.result.num_turns}\` : \`turn:\${this.#history.snapshot().length + 1}\`;
+    const nativeTurnRef = nativeTurnRefSchema.parse({
+      harnessId: this.harnessId,
+      nativeSessionId: convId,
+      nativeTurnKey: safeTurnId,
+      formatVersion: 1
+    });
+    const checkpoint = nativeCheckpointRefSchema.parse({
+      harnessId: this.harnessId,
+      nativeSessionId: convId,
+      checkpointId: safeTurnId,
+      formatVersion: 1
+    });
+    active.liveObserver?.attachConversation(convId);
+    await active.liveObserver?.flush();
+    if (this.#active === active)
+      this.#dshDrainVisibility(active);
+    await this.#dshSyncTranscriptUsage(convId, active.model?.id, false, event.result.usage, safeTurnId, active);
+    if (this.#active !== active)
+      return;
+    if (active.cancellationRequested) {
+      this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user", checkpoint }, nativeTurnRef);
+    } else if (event.result.status === "SUCCESS") {
+      if (active.permissionDenial !== null && !active.agentItem) {
+        this.#completeTurn(active, {
+          status: "failed",
+          error: permissionDeniedTurnError(active.nativePermissionMode, active.permissionDenial),
+          checkpoint
+        }, nativeTurnRef);
+      } else {
+        this.#completeTurn(active, { status: "succeeded", checkpoint }, nativeTurnRef);
+      }
+    } else {
+      const error51 = this.#resultError(active, event);
+      if (repliedThisTurn && event.result.error?.trim() && this.#reportedEarlier(error51)) {
+        this.#completeTurn(active, { status: "succeeded", checkpoint }, nativeTurnRef);
+      } else {
+        this.#completeTurn(active, { status: "failed", error: error51, checkpoint }, nativeTurnRef);
+      }
+    }`,
+    `    active.liveObserver?.attachConversation(convId);
+    await active.liveObserver?.flush();
+    if (this.#active === active)
+      this.#dshDrainVisibility(active);
+    const willCancel = active.cancellationRequested;
+    const willPermissionFail = !willCancel && event.result.status === "SUCCESS" && active.permissionDenial !== null && !active.agentItem;
+    const rawResultError = !willCancel && event.result.status !== "SUCCESS" ? this.#resultError(active, event) : null;
+    const willSucceed = !willCancel && (event.result.status === "SUCCESS" ? !willPermissionFail : Boolean(repliedThisTurn && event.result.error?.trim() && this.#reportedEarlier(rawResultError)));
+    const safeTurnId = dshResolveAntigravityTurnKey({
+      numTurns: event.result.num_turns,
+      existingKeys: this.#history.dshKnownTurnKeys(),
+      willSucceed
+    });
+    const nativeTurnRef = safeTurnId ? nativeTurnRefSchema.parse({
+      harnessId: this.harnessId,
+      nativeSessionId: convId,
+      nativeTurnKey: safeTurnId,
+      formatVersion: 1
+    }) : void 0;
+    const checkpoint = safeTurnId ? nativeCheckpointRefSchema.parse({
+      harnessId: this.harnessId,
+      nativeSessionId: convId,
+      checkpointId: safeTurnId,
+      formatVersion: 1
+    }) : void 0;
+    await this.#dshSyncTranscriptUsage(convId, active.model?.id, false, event.result.usage, safeTurnId, active);
+    if (this.#active !== active)
+      return;
+    if (active.cancellationRequested) {
+      this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user", ...checkpoint ? { checkpoint } : {} }, nativeTurnRef);
+    } else if (event.result.status === "SUCCESS") {
+      if (active.permissionDenial !== null && !active.agentItem) {
+        this.#completeTurn(active, {
+          status: "failed",
+          error: permissionDeniedTurnError(active.nativePermissionMode, active.permissionDenial),
+          ...checkpoint ? { checkpoint } : {}
+        }, nativeTurnRef);
+      } else {
+        this.#completeTurn(active, { status: "succeeded", checkpoint }, nativeTurnRef);
+      }
+    } else {
+      const error51 = rawResultError ?? this.#resultError(active, event);
+      if (repliedThisTurn && event.result.error?.trim() && this.#reportedEarlier(error51)) {
+        this.#completeTurn(active, { status: "succeeded", checkpoint }, nativeTurnRef);
+      } else {
+        this.#completeTurn(active, { status: "failed", error: error51, ...checkpoint ? { checkpoint } : {} }, nativeTurnRef);
+      }
+    }`,
+    'prevent duplicate or zero nativeTurnKey collisions on Antigravity result completion',
+  );
+
+  // 6. Zero-side-effect pre-turn transient retry (e.g. proxy EOF during Eligibility check).
+  source = replace(
+    source,
+    `      reasoningItem: null,
+      reasoningText: "",
+      liveObserver: null,
+      deferredVisibility: [],
+      flushedSteps: /* @__PURE__ */ new Set(),`,
+    `      reasoningItem: null,
+      reasoningText: "",
+      liveObserver: null,
+      deferredVisibility: [],
+      flushedSteps: /* @__PURE__ */ new Set(),
+      attemptSeq: 1,
+      preTurnRetryCount: 0,
+      retryAbort: null,
+      retryText: text,
+      retryEnvironment: environment,`,
+    'track pre-turn retry state on active Antigravity turn',
+  );
+
+  source = replace(
+    source,
+    `    this.#active = active;
+    this.#subagentObservers.add(active.subagents);
+    active.liveObserver = new DshAntigravityLiveObserver({
+      environment: this.#environment,
+      logPath,
+      initialConversationId: this.#nativeRef?.nativeSessionId,
+      onReady: () => {
+        this.#enqueue(active, () => {
+          if (this.#active !== active)
+            return;
+          this.#dshDrainVisibility(active);
+        });
+      }
+    });
+    active.liveObserver.start();
+    child.stdin.on("error", () => void 0);
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      active.stderr = (active.stderr + chunk).slice(-8e3);
+    });
+    const lines = readline.createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      const event = parseAntigravityStreamLine(line);
+      if (event)
+        this.#enqueue(active, () => this.#handleEvent(active, event));
+      else if (line.trim())
+        active.stderr = (active.stderr + \`
+\${line}\`).slice(-8e3);
+    });
+    child.once("error", (error51) => {
+      this.#enqueue(active, () => {
+        if (this.#active !== active)
+          return;
+        this.#completeTurn(active, {
+          status: "failed",
+          error: { code: "nativeFailure", message: error51.message, retryable: true }
+        });
+      });
+    });
+    child.once("close", (code) => {
+      this.#enqueue(active, async () => {
+        if (this.#active === active && !active.receivedResult) {
+          await active.liveObserver?.flush();
+          this.#dshDrainVisibility(active);
+        }
+        active.liveObserver?.stop();
+        void unlink(active.logPath).catch(() => void 0);
+        if (active.subagents.running)
+          void active.subagents.cancel();
+        else
+          active.subagents.stop();
+        if (this.#active !== active || active.receivedResult)
+          return;
+        if (active.cancellationRequested) {
+          this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user" });
+        } else {
+          this.#completeTurn(active, {
+            status: "failed",
+            error: normalizedProcessError(active.stderr, \`Antigravity CLI exited before a result event (code \${String(code)})\`)
+          });
+        }
+      });
+    });`,
+    `    this.#active = active;
+    this.#subagentObservers.add(active.subagents);
+    this.#dshAttachAntigravityChild(active, child, logPath, 1);`,
+    'attach Antigravity child process listeners with per-attempt sequence guard',
+  );
+
+  source = replace(
+    source,
+    `    const active = this.#active;
+    active.cancellationRequested = true;
+    active.questions.stop();`,
+    `    const active = this.#active;
+    active.cancellationRequested = true;
+    active.retryAbort?.abort();
+    active.questions.stop();`,
+    'abort pending pre-turn retry backoff immediately on turn cancellation',
+  );
+
+  source = replace(
+    source,
+    `    if (this.#active) {
+      const active = this.#active;
+      active.cancellationRequested = true;
+      await active.subagents.cancel();`,
+    `    if (this.#active) {
+      const active = this.#active;
+      active.cancellationRequested = true;
+      active.retryAbort?.abort();
+      await active.subagents.cancel();`,
+    'abort pending pre-turn retry backoff immediately on session close',
+  );
+
+  source = replace(
+    source,
+    `    active.liveObserver?.stop();
+    active.questions.stop();`,
+    `    active.retryAbort?.abort();
+    active.retryAbort = null;
+    active.liveObserver?.stop();
+    active.questions.stop();`,
+    'clear pre-turn retry abort controller when Antigravity turn completes',
+  );
+
+  source = replace(
+    source,
+    `      } else {
+        this.#completeTurn(active, { status: "failed", error: error51, ...checkpoint ? { checkpoint } : {} }, nativeTurnRef);
+      }
+    }`,
+    `      } else {
+        const authRefreshReason = active.liveObserver?.authRefreshNetworkReason;
+        const retryMessage = /authentication failed or timed out/iu.test(error51.message) && authRefreshReason
+          ? \`OAuth token refresh failed due to network error: \${authRefreshReason}\`
+          : error51.message;
+        if (this.#dshMaybeRetryPreTurn(active, retryMessage, { safeTurnId, repliedThisTurn }))
+          return;
+        this.#completeTurn(active, { status: "failed", error: error51, ...checkpoint ? { checkpoint } : {} }, nativeTurnRef);
+      }
+    }`,
+    'retry zero-side-effect pre-turn transient Antigravity result failures',
+  );
+
+  source = replace(
+    source,
+    `  #dshDrainVisibility(active) {`,
+    `  #dshAttachAntigravityChild(active, child, attemptLogPath, attempt) {
+    active.liveObserver?.stop();
+    active.liveObserver = new DshAntigravityLiveObserver({
+      environment: this.#environment,
+      logPath: attemptLogPath,
+      initialConversationId: this.#nativeRef?.nativeSessionId,
+      onReady: () => {
+        this.#enqueue(active, () => {
+          if (this.#active !== active || active.attemptSeq !== attempt)
+            return;
+          this.#dshDrainVisibility(active);
+        });
+      }
+    });
+    active.liveObserver.start();
+    child.stdin.on("error", () => void 0);
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      if (this.#active !== active || active.attemptSeq !== attempt)
+        return;
+      active.stderr = (active.stderr + chunk).slice(-8e3);
+    });
+    const lines = readline.createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      if (this.#active !== active || active.attemptSeq !== attempt)
+        return;
+      const event = parseAntigravityStreamLine(line);
+      if (event)
+        this.#enqueue(active, () => {
+          if (this.#active !== active || active.attemptSeq !== attempt)
+            return;
+          return this.#handleEvent(active, event);
+        });
+      else if (line.trim())
+        active.stderr = (active.stderr + \`
+\${line}\`).slice(-8e3);
+    });
+    child.once("error", (error51) => {
+      this.#enqueue(active, () => {
+        if (this.#active !== active || active.attemptSeq !== attempt)
+          return;
+        this.#completeTurn(active, {
+          status: "failed",
+          error: { code: "nativeFailure", message: error51.message, retryable: true }
+        });
+      });
+    });
+    child.once("close", (code) => {
+      this.#enqueue(active, async () => {
+        void unlink(attemptLogPath).catch(() => void 0);
+        if (this.#active !== active || active.attemptSeq !== attempt)
+          return;
+        if (!active.receivedResult) {
+          await active.liveObserver?.flush();
+          this.#dshDrainVisibility(active);
+        }
+        active.liveObserver?.stop();
+        if (active.receivedResult)
+          return;
+        if (active.cancellationRequested) {
+          if (active.subagents.running)
+            void active.subagents.cancel();
+          else
+            active.subagents.stop();
+          this.#completeTurn(active, { status: "cancelled", reason: "Cancelled by user" });
+          return;
+        }
+        const closeError = normalizedProcessError(active.stderr, \`Antigravity CLI exited before a result event (code \${String(code)})\`);
+        const authRefreshReason = active.liveObserver?.authRefreshNetworkReason;
+        const closeRetryMessage = /authentication failed or timed out/iu.test(closeError.message) && authRefreshReason
+          ? \`OAuth token refresh failed due to network error: \${authRefreshReason}\`
+          : closeError.message;
+        if (this.#dshMaybeRetryPreTurn(active, closeRetryMessage, { safeTurnId: null, repliedThisTurn: false }))
+          return;
+        if (active.subagents.running)
+          void active.subagents.cancel();
+        else
+          active.subagents.stop();
+        this.#completeTurn(active, {
+          status: "failed",
+          error: closeError
+        });
+      });
+    });
+  }
+  #dshHasSideEffects(active, repliedThisTurn) {
+    if (repliedThisTurn || active.agentItem || active.turnAgentText)
+      return true;
+    if (active.tools.size > 0 || active.pendingSteps.size > 0 || active.subagents.running)
+      return true;
+    return active.completedItems.some(({ item }) => item.type !== "contextCompaction" && item.type !== "reasoning");
+  }
+  #dshMaybeRetryPreTurn(active, message, { safeTurnId = null, repliedThisTurn = false } = {}) {
+    if (this.#closed || this.#active !== active || active.cancellationRequested)
+      return false;
+    if (safeTurnId !== null)
+      return false;
+    if (this.#dshHasSideEffects(active, repliedThisTurn))
+      return false;
+    if (!dshIsPreTurnRetryableAntigravityError(message))
+      return false;
+    const delays = dshAntigravityPreTurnRetryDelays(this.#environment);
+    if (active.preTurnRetryCount >= delays.length)
+      return false;
+    const delayMs = delays[active.preTurnRetryCount];
+    active.preTurnRetryCount += 1;
+    active.attemptSeq += 1;
+    const nextAttempt = active.attemptSeq;
+    const prevProcess = active.process;
+    const prevLogPath = active.logPath;
+    active.liveObserver?.stop();
+    void unlink(prevLogPath).catch(() => void 0);
+    try {
+      if (prevProcess?.stdin?.writable)
+        prevProcess.stdin.end();
+      prevProcess?.kill();
+    } catch {
+    }
+    const brief = message.replace(/^Antigravity Turn ended with status ERROR:\s*/iu, "").slice(0, 180);
+    const delayLabel = delayMs >= 1e3 ? \`\${(delayMs / 1e3).toFixed(delayMs % 1e3 === 0 ? 0 : 1)}s\` : \`\${delayMs}ms\`;
+    this.#dshHandleVisibilityEvent(active, {
+      kind: "retry",
+      text: \`[AGY 启动前瞬断] \${brief}，\${delayLabel} 后自动重试（第 \${active.preTurnRetryCount}/\${delays.length} 次）\`
+    });
+    const controller = new AbortController();
+    active.retryAbort = controller;
+    void (async () => {
+      if (delayMs > 0) {
+        await new Promise((resolve) => {
+          if (controller.signal.aborted) {
+            resolve();
+            return;
+          }
+          const timer = setTimeout(() => {
+            controller.signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, delayMs);
+          const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          controller.signal.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      this.#enqueue(active, () => {
+        if (this.#active !== active || active.attemptSeq !== nextAttempt)
+          return;
+        if (active.retryAbort === controller)
+          active.retryAbort = null;
+        if (this.#closed || active.cancellationRequested) {
+          this.#completeTurn(active, {
+            status: "cancelled",
+            reason: this.#closed ? "Session closed" : "Cancelled by user"
+          });
+          return;
+        }
+        const nextLogPath = path11.join(os6.tmpdir(), \`dsh-host-antigravity-\${randomUUID6()}.log\`);
+        const arguments_ = [
+          "--input-format",
+          "stream-json",
+          "--output-format",
+          "stream-json",
+          "--print-timeout",
+          this.#printTimeout
+        ];
+        if (this.#nativeRef)
+          arguments_.unshift("--conversation", this.#nativeRef.nativeSessionId);
+        arguments_.push(...antigravityModelArguments(this.#model, this.#thinkingOptionId));
+        arguments_.push("--dangerously-skip-permissions");
+        arguments_.push("--add-dir", this.#cwd);
+        arguments_.push("--add-dir", active.questions.directory);
+        arguments_.push("--log-file", nextLogPath);
+        const invocation = commandInvocation(this.#executable, arguments_, active.retryEnvironment);
+        let nextChild;
+        try {
+          nextChild = spawn(invocation.command, invocation.arguments, {
+            cwd: this.#cwd,
+            env: active.retryEnvironment,
+            windowsHide: true,
+            windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+        } catch (error51) {
+          this.#completeTurn(active, {
+            status: "failed",
+            error: { code: "nativeFailure", message: errorMessage(error51), retryable: true }
+          });
+          return;
+        }
+        active.process = nextChild;
+        active.exited = new Promise((resolve) => nextChild.once("close", () => resolve()));
+        active.logPath = nextLogPath;
+        active.stderr = "";
+        active.receivedResult = false;
+        active.httpsPort = null;
+        active.flushedSteps.clear();
+        this.#dshAttachAntigravityChild(active, nextChild, nextLogPath, nextAttempt);
+        try {
+          const turnPrompt = formatAntigravityTurnPrompt(active.retryText, this.#cwd);
+          if (nextChild.stdin.writable) {
+            nextChild.stdin.write(\`\${JSON.stringify({ event: "user", message: { content: turnPrompt } })}
+\`, () => void 0);
+          }
+        } catch (error51) {
+          nextChild.kill();
+          this.#completeTurn(active, {
+            status: "failed",
+            error: { code: "nativeFailure", message: errorMessage(error51), retryable: true }
+          });
+        }
+      });
+    })();
+    return true;
+  }
+  #dshDrainVisibility(active) {`,
+    'implement bounded zero-side-effect pre-turn transient retry for Antigravity CLI',
+  );
+
+  // 7. WAL-safe SQLite snapshot (VACUUM INTO) for Antigravity fork + allow forking from completed checkpoints while a turn is active.
+  source = replace(
+    source,
+    `  try {
+    await mkdir2(path6.dirname(targetDb), { recursive: true });
+    await copyFile(sourceDb, targetDb);
+  } catch {
+    return false;
+  }
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return false;
+  }`,
+    `  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return false;
+  }
+  try {
+    await mkdir2(path6.dirname(targetDb), { recursive: true });
+    let clonedByVacuum = false;
+    try {
+      const srcDb = new DatabaseSync(sourceDb, { readOnly: true, timeout: 5e3 });
+      try {
+        srcDb.exec(\`VACUUM INTO '\${targetDb.replace(/'/g, "''")}'\`);
+        clonedByVacuum = true;
+      } finally {
+        srcDb.close();
+      }
+    } catch {
+      clonedByVacuum = false;
+    }
+    if (!clonedByVacuum) {
+      await copyFile(sourceDb, targetDb);
+      await copyFile(\`\${sourceDb}-wal\`, \`\${targetDb}-wal\`).catch(() => void 0);
+      await copyFile(\`\${sourceDb}-shm\`, \`\${targetDb}-shm\`).catch(() => void 0);
+    }
+  } catch {
+    return false;
+  }`,
+    'use WAL-safe SQLite VACUUM INTO snapshot when cloning Antigravity conversation DB for fork',
+  );
+
+  source = replace(
+    source,
+    `  if (sourceSession?.isActive) {
+    return {
+      ok: false,
+      error: {
+        code: "sessionBusy",
+        message: "Antigravity Session cannot fork while a Turn is active",
+        retryable: true
+      }
+    };
+  }`,
+    `  // Allow forking from any completed checkpoint even while the source Turn is active:
+  // sourceHistory.snapshot() only contains settled turns and cloneNativeConversationDb
+  // takes an isolated WAL-safe snapshot truncated to retainedTurns.length.`,
+    'allow Antigravity fork from settled checkpoints while source Turn is active',
   );
 
   return source;

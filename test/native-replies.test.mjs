@@ -6,7 +6,7 @@ const mapping = { version: 1, sessionId: 'a', phase: 'ready', harnessId: 'claude
 function fixture({ history = [], request, requested = () => false, reconnectMs = 100000 } = {}) {
   const events = [], callbacks = new Map(), agents = new Map(), calls = [], listeners = new Set(), closed = Promise.withResolvers()
   const session = { id: 'a', header: {}, snapshotEvents: () => events, append(type, data, options) { const e = { type, data, seq: events.length, time: 1000, ...(type.startsWith('plugin:') ? { ignorable: true } : {}), ...options }; events.push(e); return e } }
-  session.append('plugin:codexhost/thread', { ...mapping })
+  session.append('plugin:dsh-host/thread', { ...mapping })
   const agent = { id: 'a', session }; agents.set('a', agent)
   let thread = { id: 'thread', status: { type: 'idle' }, updatedAt: 1, historyMode: 'legacy', turns: history }
   const peer = { closed: closed.promise, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, async request(method, params) {
@@ -41,7 +41,7 @@ test('completed live Items are not retroactively interrupted by a later provider
 
 test('completed requested Turn is not mistaken for all Thread work; autonomous replies are display-only', async () => {
   const f = fixture({ history: [native('owned', 'already shown'), native('auto', '后续回复')] })
-  f.session.append('plugin:codexhost/thread', { ...mapping, phase: 'submitted', localTurn: 2, hostTurnId: 'owned' })
+  f.session.append('plugin:dsh-host/thread', { ...mapping, phase: 'submitted', localTurn: 2, hostTurnId: 'owned' })
   f.session.append('assistant/message', { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'already shown' }] } }, { surfaceOp: 'append' })
   try {
     await f.start()
@@ -49,7 +49,7 @@ test('completed requested Turn is not mistaken for all Thread work; autonomous r
     assert.equal(f.messages()[0].surfaceOp, undefined); assert.equal(f.messages()[0].ignorable, true)
     assert.ok(f.calls.every(c => ['thread/read', 'thread/turns/list'].includes(c.method)), 'Read-only methods only')
     assert.equal(f.events.some(e => ['turn/start', 'step/start', 'tool/call'].includes(e.type)), false)
-    assert.equal(f.events.findLast(e => e.type === 'plugin:codexhost/thread').data.phase, 'submitted')
+    assert.equal(f.events.findLast(e => e.type === 'plugin:dsh-host/thread').data.phase, 'submitted')
   } finally { await f.sync.close() }
 })
 
@@ -88,7 +88,7 @@ test('normal active request is withheld until its own projector commits, without
   const f = fixture({ history: [native('owned', 'answer')], requested: () => requested })
   try {
     const s = await f.start(); assert.equal(f.messages().length, 0)
-    f.session.append('plugin:codexhost/thread', { ...mapping, hostTurnId: 'owned', localTurn: 1 })
+    f.session.append('plugin:dsh-host/thread', { ...mapping, hostTurnId: 'owned', localTurn: 1 })
     f.session.append('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'answer' }] } }, { surfaceOp: 'append' })
     requested = false; await f.sync.flush(s); assert.equal(f.messages().length, 0)
     assert.equal(locallyCovered(f.session, 'other', 'answer'), false, 'A quote or another Turn is not a receipt')
@@ -131,7 +131,7 @@ test('mapping fork, mismatched Session identity and ambiguous Thread owners rema
   const f = fixture()
   try {
     await f.start()
-    const other = { id: 'b', session: { id: 'b', header: {}, snapshotEvents: () => [{ type: 'plugin:codexhost/thread', ignorable: true, data: { ...mapping, sessionId: 'b' } }] } }
+    const other = { id: 'b', session: { id: 'b', header: {}, snapshotEvents: () => [{ type: 'plugin:dsh-host/thread', ignorable: true, data: { ...mapping, sessionId: 'b' } }] } }
     const s2 = f.sync.track(other); assert.equal(f.sync.valid(s2), false)
     f.emit('item/completed', { turnId: 'auto', item: { id: 'item', type: 'agentMessage', text: 'secret' } })
     assert.equal(f.messages().length, 0)
@@ -246,7 +246,7 @@ test('after restart persisted replies bound the catch-up; missed Turns are all r
 test('a Turn already shown by its local DSH Turn also bounds the catch-up', async () => {
   const history = Array.from({ length: 30 }, (_, i) => native('t' + i, 'reply ' + i))
   const f = fixture({ history: [...history, native('owned', 'shown locally'), native('after', 'autonomous')] })
-  f.session.append('plugin:codexhost/thread', { ...mapping, phase: 'ready', localTurn: 7, hostTurnId: 'owned' })
+  f.session.append('plugin:dsh-host/thread', { ...mapping, phase: 'ready', localTurn: 7, hostTurnId: 'owned' })
   f.session.append('assistant/message', { turn: 7, step: 1, message: { content: [{ type: 'text', text: 'shown locally' }] } }, { surfaceOp: 'append' })
   try {
     await f.start()
@@ -280,7 +280,7 @@ test('a freshly imported Session catches up only past the import watermark', asy
   const history = Array.from({ length: 30 }, (_, i) => native('p' + String(i).padStart(2, '0'), 'reply ' + i))
   const f = fixture({ history })
   // historySeed records the newest imported Turn; everything at or before it is already in the Session.
-  f.session.append('plugin:codexhost/import', { version: 1, harnessId: 'claude-code', threadId: 'thread', importedAt: 1, turns: 28, newestTurnId: 'p27' })
+  f.session.append('plugin:dsh-host/import', { version: 1, harnessId: 'claude-code', threadId: 'thread', importedAt: 1, turns: 28, newestTurnId: 'p27' })
   try {
     await f.start()
     assert.deepEqual(f.messages().map(m => m.data.hostTurnId), ['p28', 'p29'], 'only Turns newer than the import are synced')

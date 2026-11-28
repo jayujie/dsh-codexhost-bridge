@@ -814,3 +814,49 @@ test('Claude catalog disk cache round-trips, validates executable stat, and reje
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 })
+
+test('NativeSessionDriver migrates legacy Antigravity xhigh model IDs and clamps xhigh to high on high-max models', async () => {
+  const inspected = {
+    status: 'ready',
+    catalog: {
+      models: [
+        { ref: { id: 'gemini-4-neon' }, label: 'Gemini 4 Neon', resolvedModelLabel: 'gemini-4-neon', supportedThinkingOptionIds: ['low', 'medium', 'high', 'xhigh'] },
+        { ref: { id: 'gemini-4-carbon' }, label: 'Gemini 4 Carbon', resolvedModelLabel: 'gemini-4-carbon', supportedThinkingOptionIds: ['low', 'medium', 'high'] },
+      ],
+      defaultModel: { id: 'gemini-4-neon' },
+      thinkingOptions: [
+        { id: 'low', label: 'Low' },
+        { id: 'medium', label: 'Medium' },
+        { id: 'high', label: 'High' },
+        { id: 'xhigh', label: 'XHigh' },
+      ],
+      defaultThinkingOptionId: 'high',
+    },
+    permissionModes: { modes: [{ id: 'dangerously-skip-permissions', label: 'Skip permissions', dangerous: true }], defaultModeId: 'dangerously-skip-permissions' },
+  }
+  const sessionEvents = [{ type: 'plugin:codexhost/configuration', ignorable: true, data: { harnessId: 'antigravity', modelId: 'gemini-4-neon-xhigh', permissionModeId: 'dangerously-skip-permissions' } }]
+  const peer = {
+    closed: new Promise(() => {}),
+    subscribe: () => () => {},
+    close() {},
+    async request(method) {
+      if (method === 'codexhost/harness/inspect') return inspected
+      throw new Error('Unexpected RPC ' + method)
+    },
+  }
+  const driver = new NativeSessionDriver(
+    { agentPresets: { presetForSession: () => 'codexhost-antigravity' }, sessionPersistence: { async flush() {} } },
+    { appendPluginRecord(_session, type, data) { sessionEvents.push({ type, ignorable: true, data }) } },
+    { connect: async () => peer },
+  )
+  const agent = { id: 'agy-migrate', runMaintenance: fn => fn(), session: { header: { cwd: 'D:/work' }, snapshotEvents: () => sessionEvents } }
+  const migrated = await driver.catalog(agent)
+  assert.equal(migrated.status, 'ready', migrated.error)
+  assert.equal(migrated.selection.modelId, 'gemini-4-neon')
+  assert.equal(migrated.selection.thinkingOptionId, 'xhigh')
+
+  const switched = await driver.configure(agent, { modelId: 'gemini-4-carbon' })
+  assert.equal(switched.selection.modelId, 'gemini-4-carbon')
+  assert.equal(switched.selection.thinkingOptionId, 'high')
+  await driver.dispose()
+})

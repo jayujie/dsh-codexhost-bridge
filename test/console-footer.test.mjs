@@ -10,12 +10,12 @@ const api = vm.runInNewContext(`${source}\n;({installConsoleClient, ConsoleFoote
 test('console moves to footer with icon only and retains access guard, navigation and disposal', () => {
   const registrations = [], selected = [], removed = []
   const scope = {
-    remote: { codexHostConsole: {} }, uiWorkspace: {}, layout: { selectPanel: id => selected.push(id) },
+    remote: { dshHostConsole: {} }, uiWorkspace: {}, layout: { selectPanel: id => selected.push(id) },
     slots: {
       inject: (_name, fn) => fn(),
       register: (options, component) => { registrations.push({ options, component }); return () => removed.push(options.name) },
     },
-    remoteAccess: { whenAccess: (key, fn) => { assert.equal(key, 'codexHostConsole/bootstrap'); scope.disposers = [...fn()] } },
+    remoteAccess: { whenAccess: (key, fn) => { assert.equal(key, 'dshHostConsole/bootstrap'); scope.disposers = [...fn()] } },
   }
   api.installConsoleClient({ effect() {}, inject: (_deps, fn) => fn(scope) }, key => key)
   assert.deepEqual(registrations.map(r => r.options.name), ['main', 'sidebar.footer.action'])
@@ -29,7 +29,7 @@ test('console moves to footer with icon only and retains access guard, navigatio
     assert.equal(typeof button.children[0].type, 'function')
     button.props.onClick()
   }
-  assert.deepEqual(selected, ['codexhost-console', 'codexhost-console'])
+  assert.deepEqual(selected, ['dsh-host-console', 'dsh-host-console'])
   scope.disposers.reverse().forEach(dispose => dispose())
   assert.deepEqual(removed, ['sidebar.footer.action', 'main'])
   assert.match(api.dshConsoleCss, /grid-template-columns:minmax\(0,1fr\) 44px 36px/)

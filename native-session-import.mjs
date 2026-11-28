@@ -1,5 +1,6 @@
+import { hostRecord, isHostRecord } from './host-identity.mjs'
 import { createHash } from 'node:crypto'
-import { presetForEngine, engineLabel } from './external-engines.mjs'
+import { presetForEngine, engineLabel, hostProvider } from './external-engines.mjs'
 import path from 'node:path'
 import { NativeTurnProjector } from './native-turn-projector.mjs'
 import { nativeThreadState } from './native-session-driver.mjs'
@@ -65,7 +66,7 @@ export function historySeed(thread, harnessId, selection, helpers, usageSnapshot
     at = nativeTurn.startedAtMs ?? (typeof nativeTurn.startedAt === 'number' ? nativeTurn.startedAt * 1000 : undefined) ?? nativeTurn.items.find(item => item.startedAtMs)?.startedAtMs ?? at
     const startTime = at
     session.append('turn/start', { turn }); session.append('step/start', { turn, step })
-    const projector = new NativeTurnProjector({ agent: { id, session }, turn, step, helpers, dispatch: { emit() {} }, nextRevision: () => ++revision, provider: `codexhost/${harnessId}`, model: selection.modelId ?? thread.model ?? '' })
+    const projector = new NativeTurnProjector({ agent: { id, session }, turn, step, helpers, dispatch: { emit() {} }, nextRevision: () => ++revision, provider: hostProvider(harnessId), model: selection.modelId ?? thread.model ?? '' })
     for (const item of nativeTurn.items) {
       if (item.type === 'userMessage') {
         const content = (item.content ?? []).map(block => block.type === 'text' ? { type: 'text', text: block.text }
@@ -82,12 +83,12 @@ export function historySeed(thread, harnessId, selection, helpers, usageSnapshot
     session.append('turn/end', { turn, reason })
   }
   at = Date.now()
-  session.append('plugin:codexhost/configuration', { harnessId, ...selection })
-  session.append('plugin:codexhost/thread', { version: 1, sessionId: id, harnessId, threadId: thread.id, phase: 'ready', appliedConfiguration: selection })
+  session.append(hostRecord('configuration'), { harnessId, ...selection })
+  session.append(hostRecord('thread'), { version: 1, sessionId: id, harnessId, threadId: thread.id, phase: 'ready', appliedConfiguration: selection })
   // newestTurnId is the sync watermark: every Turn at or before it is already in this Session
   // (or deliberately left out when truncated), so reply sync must not page back past it.
   const newestTurnId = thread.turns.at(-1)?.id
-  session.append('plugin:codexhost/import', { version: 1, harnessId, threadId: thread.id, importedAt: at, turns: n, ...(typeof newestTurnId === 'string' && newestTurnId ? { newestTurnId } : {}), ...(thread.truncated === true ? { truncated: true } : {}) })
+  session.append(hostRecord('import'), { version: 1, harnessId, threadId: thread.id, importedAt: at, turns: n, ...(typeof newestTurnId === 'string' && newestTurnId ? { newestTurnId } : {}), ...(thread.truncated === true ? { truncated: true } : {}) })
   const named = (thread.name || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
   const preview = (thread.preview || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
   const title = named || (preview.length > 80 ? `${preview.slice(0, 80).trimEnd()}…` : preview)
@@ -95,7 +96,7 @@ export function historySeed(thread, harnessId, selection, helpers, usageSnapshot
   if (title && messageSeqs.length) session.append('session/title', {
     title: Buffer.from(title).subarray(0, 500).toString('utf8').replace(/\uFFFD$/, ''),
     messageSeqs,
-    source: named ? { kind: 'provider', provider: 'codexhost-native-title' } : { kind: 'fallback' },
+    source: named ? { kind: 'provider', provider: 'dsh-host-native-title' } : { kind: 'fallback' },
   })
   const usage = observedUsage(usageSnapshot), cost = observedCost(usageSnapshot)
   if (usage) session.append(OBSERVATION, { threadId: thread.id, harnessId, model: selection.modelId ?? '', observedAt: at, usage, ...(cost ? { cost } : {}) })
@@ -192,7 +193,7 @@ export class NativeSessionImporter {
               for (let offset = 0; ; offset += 512) {
                 const { events } = await handle.read(offset, 512)
                 for (const ev of events) {
-                  if (ev.type === 'plugin:codexhost/thread') threadEvents.push(ev)
+                  if (isHostRecord(ev.type, 'thread')) threadEvents.push(ev)
                   else if (ev.type === 'session/title' && typeof ev.data?.title === 'string' && ev.data.title.trim()) latestTitle = ev.data
                 }
                 if (events.length < 512) break
@@ -254,15 +255,16 @@ export class NativeSessionImporter {
     if (agent) {
       const state = nativeThreadState(agent.session)
       if (state?.threadId !== threadId || state?.harnessId !== harnessId || state.phase !== 'ready' || (state.sessionId !== undefined && state.sessionId !== id)) throw new Error('此 DSH 会话已属于另一个原生 Agent或映射不允许续聊，已停止导入。')
-      return true
+      return { exists: true, cwd: agent.session?.header?.cwd }
     }
-    if (!await this.ctx.sessionPersistence.stat(id)) return false
+    const stat = await this.ctx.sessionPersistence.stat(id)
+    if (!stat) return null
     const handle = await this.ctx.sessionPersistence.open(id, 'read')
     try {
       const { events } = await handle.read()
       const state = nativeThreadState({ snapshotEvents: () => events })
       if (state?.threadId !== threadId || state?.harnessId !== harnessId || state.phase !== 'ready' || (state.sessionId !== undefined && state.sessionId !== id)) throw new Error('已保存的会话映射不一致，已停止导入。')
-      return true
+      return { exists: true, cwd: stat.header?.cwd }
     } finally { await handle.close() }
   }
   async #findStored(threadId, harnessId, cwd) {
@@ -279,7 +281,7 @@ export class NativeSessionImporter {
             const records = []
             for (let offset = 0; ; offset += 512) {
               const { events } = await handle.read(offset, 512)
-              records.push(...events.filter(e => e.type === 'plugin:codexhost/thread'))
+              records.push(...events.filter(e => isHostRecord(e.type, 'thread')))
               if (events.length < 512) break
             }
             state = nativeThreadState({ snapshotEvents: () => records })
@@ -309,24 +311,32 @@ export class NativeSessionImporter {
     if (thread.id !== threadId) throw new Error('原生会话身份不一致，已停止导入。')
     if (isRunning(thread)) throw new Error('会话正在原客户端运行，请先停止后导入。')
     if (!path.isAbsolute(thread.cwd)) throw new Error('原会话没有有效工作目录，已停止导入。')
-    // Native registry validates existence/canonical path. Never substitute another cwd.
-    const workspace = await this.ctx.workspaceRegistry.create(thread.cwd)
     const prior = this.ctx.agents.list().find(agent => {
       try { const s = nativeThreadState(agent.session); return s?.threadId === threadId && s.harnessId === input.harnessId && (s.sessionId === undefined || s.sessionId === agent.id) } catch { return false }
     })
     if (prior && nativeThreadState(prior.session)?.phase !== 'ready') throw new Error('此会话在 DSH 中仍有未确认的任务，请先检查现有会话。')
     const candidateId = importSessionId(input.harnessId, threadId)
-    const deterministic = prior ? false : await this.#existing(candidateId, threadId, input.harnessId)
+    const deterministic = prior ? null : await this.#existing(candidateId, threadId, input.harnessId)
     const storedId = prior || deterministic ? undefined : await this.#findStored(threadId, input.harnessId, thread.cwd)
     const sessionId = prior?.id ?? storedId ?? candidateId
+    const reused = Boolean(prior || deterministic || storedId)
+    const existingCwd = prior?.session?.header?.cwd ?? deterministic?.cwd
+    const targetCwd = reused && typeof existingCwd === 'string' && path.isAbsolute(existingCwd) ? existingCwd : thread.cwd
+    // Native registry validates existence/canonical path and creates a Workspace if absent. Never substitute another cwd.
+    const existingWorkspace = typeof this.ctx.workspaceRegistry.resolveByPath === 'function'
+      ? await this.ctx.workspaceRegistry.resolveByPath(targetCwd).catch(() => undefined)
+      : undefined
+    const workspace = await this.ctx.workspaceRegistry.create(targetCwd)
+    const workspaceCreated = typeof this.ctx.workspaceRegistry.resolveByPath === 'function' ? !existingWorkspace : false
+    const canonicalCwd = typeof workspace.path === 'string' && workspace.path ? workspace.path : targetCwd
     let truncated = false // true only when this call created the Session from a trimmed history
-    if (!prior && !deterministic && !storedId) {
+    if (!reused) {
       const preset = presetForEngine(input.harnessId)
       // Use native model identity when supplied. Missing effort/permission falls back to
       // catalog defaults on continuation; importing itself changes no native settings.
       const selection = { ...(thread.model ? { modelId: thread.model } : {}), ...(thread.reasoningEffort ? { thinkingOptionId: thread.reasoningEffort } : {}), permissionModeId: input.harnessId === 'codex' ? 'read-only' : 'default' }
       if (input.harnessId !== 'codex') {
-        const inspection = await peer.request('codexhost/harness/inspect', { harnessId: input.harnessId, cwd: thread.cwd, refresh: false })
+        const inspection = await peer.request('codexhost/harness/inspect', { harnessId: input.harnessId, cwd: canonicalCwd, refresh: false })
         if (inspection.status !== 'ready') throw new Error(inspection.error?.message ?? `${engineLabel(input.harnessId)} 尚未就绪。`)
         // External thread metadata can contain an encoded Host route. Resolve IDs against
         // the actual catalog rather than persisting that transport string as a model.
@@ -343,7 +353,7 @@ export class NativeSessionImporter {
       truncated = thread.truncated === true
       const defaults = this.ctx.get('agentDefaultModel')
       const current = defaults?.currentSelection()
-      const handle = await this.ctx.agents.create({ sessionId, meta: { cwd: thread.cwd, agentPreset: preset }, seed,
+      const handle = await this.ctx.agents.create({ sessionId, meta: { cwd: canonicalCwd, agentPreset: preset }, seed,
         ...(current ? { agentOptions: { provider: current.provider, model: current.model, reasoningEffort: current.reasoningEffort } } : {}),
         setup: async actx => {
           this.helpers.installModelSelection?.(actx)
@@ -354,6 +364,23 @@ export class NativeSessionImporter {
       await this.ctx.sessionPersistence.flush()
     }
     await workspace.attachSession(sessionId)
-    return { sessionId, threadId, workspaceId: workspace.id, cwd: thread.cwd, ...(truncated ? { truncated: true } : {}) }
+    let unarchived = false
+    if (Array.isArray(this.ctx.workspaceRegistry.archivedSessionIds)
+      && this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+      && typeof this.ctx.workspaceRegistry.unarchiveSession === 'function') {
+      await this.ctx.workspaceRegistry.unarchiveSession(sessionId)
+      unarchived = true
+    }
+    return {
+      sessionId,
+      threadId,
+      workspaceId: workspace.id,
+      ...(typeof workspace.title === 'string' && workspace.title ? { workspaceTitle: workspace.title } : {}),
+      cwd: canonicalCwd,
+      ...(workspaceCreated ? { workspaceCreated: true } : {}),
+      ...(reused ? { reused: true } : {}),
+      ...(unarchived ? { unarchived: true } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    }
   }
 }

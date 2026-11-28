@@ -9,7 +9,7 @@ const pending = { version: 1, sessionId: 'session-a', phase: 'submitted', harnes
 function setup(mapping = pending, options = {}) {
   const events = [], calls = [], listeners = new Set()
   const session = { id: 'session-a', header: { cwd: 'D:/work' }, snapshotEvents: () => events, append(type, data) { const event = { type, data, seq: events.length, ...(type.startsWith('plugin:') ? { ignorable: true } : {}) }; events.push(event); return event } }
-  if (mapping) session.append('plugin:codexhost/thread', { ...mapping })
+  if (mapping) session.append('plugin:dsh-host/thread', { ...mapping })
   let thread = { id: 'thread-a', updatedAt: 123, status: { type: 'idle' }, turns: [{ id: 'turn-a', status: 'completed' }] }
   const peer = { closed: new Promise(() => {}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) }, close() {}, async request(method, params) {
     calls.push({ method, params })
@@ -23,7 +23,7 @@ function setup(mapping = pending, options = {}) {
     throw new Error('unexpected method: ' + method)
   } }
   const helpers = { appendPluginRecord: (s, name, data) => s.append(name, data), agentEvents: () => ({ emit() {} }), AssistantStreamAccumulator: class { push(x) { return x } snapshot() { return [] } }, BlockAssembler: class { push() {} blocks() { return [] } } }
-  const ctx = { agentPresets: { presetForSession: () => options.preset ?? 'codexhost-codex' }, sessionPersistence: { async flush() { await options.flush?.(session) } } }
+  const ctx = { agentPresets: { presetForSession: () => options.preset ?? 'dsh-host-codex' }, sessionPersistence: { async flush() { await options.flush?.(session) } } }
   const driver = new NativeSessionDriver(ctx, helpers, { connect: async () => peer, cancelTimeoutMs: 1, turnTimeoutMs: 1000 })
   const agent = { id: session.id, session, async runMaintenance(fn) { return fn() } }
   return { driver, agent, session, calls, events, set thread(value) { thread = value }, get thread() { return thread } }
@@ -38,7 +38,7 @@ test('outcome check reads the exact terminal Turn; explicit commit only unlocks 
   assert.equal(confirmed.status, 'recovered')
   assert.equal(nativeThreadState(f.session).phase, 'ready')
   assert.equal(nativeThreadState(f.session).lastHostTurnId, 'turn-a')
-  assert.ok(f.events.some(e => e.type === 'plugin:codexhost/reconciled' && e.data.historyReplayed === false))
+  assert.ok(f.events.some(e => e.type === 'plugin:dsh-host/reconciled' && e.data.historyReplayed === false))
   assert.ok(f.calls.every(c => ['thread/read', 'thread/turns/list'].includes(c.method)), 'no resume, interrupt, replay or model request')
   assert.equal(f.calls.some(c => c.params?.includeTurns === true), false, 'legacy Threads no longer pull the full history either')
 })
@@ -88,7 +88,7 @@ test('confirmation rechecks remote state, rejects stale revisions and missing ac
   f.thread.status.type = 'active'
   await assert.rejects(f.driver.reconcile(f.agent, { expected: result.expected, acknowledgeStopped: true }), /not confirmed/)
   f.thread.status.type = 'idle'
-  f.session.append('plugin:codexhost/thread', { ...pending, localTurn: 2 })
+  f.session.append('plugin:dsh-host/thread', { ...pending, localTurn: 2 })
   await assert.rejects(f.driver.reconcile(f.agent, { expected: result.expected, acknowledgeStopped: true }), /conversation changed/)
   assert.equal(nativeThreadState(f.session).phase, 'submitted')
 })
@@ -197,7 +197,7 @@ test('legacy rejected start only clears after stable idle terminal history with 
 test('legacy busy recovery on new input audits rejection and submits only the new input once', async () => {
   const f = setup({ ...pending, harnessId: 'claude-code', hostTurnId: undefined, lastHostTurnId: 'turn-a',
     appliedConfiguration: { modelId: 'test-model', permissionModeId: 'bypassPermissions' } }, {
-    preset: 'codexhost-claude-code', request(method) {
+    preset: 'dsh-host-claude-code', request(method) {
       if (method === 'codexhost/harness/inspect') return { status: 'ready', catalog: { models: [{ ref: { id: 'test-model' }, label: 'Opus' }] }, permissionModes: { modes: [{ id: 'bypassPermissions' }] } }
     },
   })
@@ -205,7 +205,7 @@ test('legacy busy recovery on new input audits rejection and submits only the ne
   await assert.rejects(f.driver.run({ agent: f.agent, messages: [message], turn: 2, step: 1, signal: new AbortController().signal }), /simulated remote rejection/)
   assert.equal(f.calls.filter(c => c.method === 'turn/start').length, 1)
   assert.equal(f.calls.find(c => c.method === 'turn/start').params.input[0].text, 'test')
-  const audit = f.events.find(e => e.type === 'plugin:codexhost/reconciled')
+  const audit = f.events.find(e => e.type === 'plugin:dsh-host/reconciled')
   assert.equal(audit.data.outcome, 'rejected-before-start')
   assert.equal(audit.data.historyReplayed, false)
 })

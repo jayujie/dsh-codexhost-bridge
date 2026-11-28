@@ -1,3 +1,4 @@
+import { hostRecord } from './host-identity.mjs'
 import { randomUUID } from 'node:crypto'
 
 /** Generate from a detached native child and commit only while the original fallback is current. */
@@ -15,7 +16,7 @@ export async function completeNativeClaudeTitle(ctx, agent, peer, mapping, first
   }
   if (!unchanged()) return false
   const operationId = randomUUID(), threadId = mapping.threadId
-  const audit = data => appendPluginRecord(agent.session, 'plugin:codexhost/native-title', { version: 1, threadId, operationId, ...data })
+  const audit = data => appendPluginRecord(agent.session, hostRecord('native-title'), { version: 1, threadId, operationId, ...data })
   const flush = () => ctx.sessionPersistence.flush()
   audit({ phase: 'request', messageSeqs: [firstMessage.seq], description, model: policy.model, maxOutputTokens: policy.maxOutputTokens, timeoutMs: policy.timeoutMs, maxCostUsd: policy.maxCostUsd, extraBeta: 'claude-code-20250219', cachePolicy: 'disabled-client' })
   await flush()
@@ -33,10 +34,10 @@ export async function completeNativeClaudeTitle(ctx, agent, peer, mapping, first
     if (typeof result?.title !== 'string' || result.detached !== true || result.cachePolicy !== 'disabled-client') throw new Error('Invalid isolated native title result')
     const title = result.title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
     if (!title || Buffer.byteLength(title) > 512) throw new Error('Invalid native title text')
-    agent.session.append('session/title', { title, messageSeqs: [firstMessage.seq], source: { kind: 'provider', provider: 'codexhost-native-title' } })
+    agent.session.append('session/title', { title, messageSeqs: [firstMessage.seq], source: { kind: 'provider', provider: 'dsh-host-native-title' } })
     audit({ phase: 'result', status: 'committed', title }); await flush()
     const committed = service.get(agent.session)
-    if (!signal.aborted && committed?.title === title && committed.source.kind === 'provider' && committed.source.provider === 'codexhost-native-title') {
+    if (!signal.aborted && committed?.title === title && committed.source.kind === 'provider' && committed.source.provider === 'dsh-host-native-title') {
       try { await peer.request('thread/name/set', { threadId, name: title }, { timeoutMs: 10000 }) }
       catch (error) { ctx.logger?.warn(`Claude title saved in DSH; Host name sync unavailable: ${error.code ?? error.name}`) }
     }

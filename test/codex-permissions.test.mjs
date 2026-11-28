@@ -12,7 +12,7 @@ test('Codex permission selections carry both approval and sandbox, preserving ol
 })
 
 test('DSH preset view retains native data, notifications, and snapshot identity while excluding external Agents', () => {
-  let state = { current: 'coding', busy: false, options: [{ id: 'coding' }, { id: 'codexhost-codex' }, { id: 'custom-preset' }, { id: 'codexhost-claude-code' }] }
+  let state = { current: 'coding', busy: false, options: [{ id: 'coding' }, { id: 'dsh-host-codex' }, { id: 'custom-preset' }, { id: 'dsh-host-claude-code' }] }
   const listeners = new Set()
   const source = { getSnapshot: () => state, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } }
   const view = dshPresetView(source)
